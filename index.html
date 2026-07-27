@@ -309,7 +309,14 @@ async function iniciarApp() {
   const { data: colecoes } = await sb.from('colecoes').select('id').eq('nome', 'Legislação e Normativos').single();
   colecaoId = colecoes.id;
 
-  const { data: termos } = await sb.from('taxonomia').select('id, termo, categoria, regra_matching, parametros_matching').eq('colecao_id', colecaoId);
+  // A taxonomia tem dois eixos: 'assunto' (do que a norma trata) e 'palavra_chave' (o que ela
+  // menciona). Este painel é o de palavras-chave — o eixo de assunto entra em tela própria.
+  // O filtro por 'ativo' faz a curadoria valer sem exigir novo deploy ao desativar um termo.
+  const { data: termos } = await sb.from('taxonomia')
+    .select('id, termo, categoria, regra_matching, parametros_matching')
+    .eq('colecao_id', colecaoId)
+    .eq('tipo', 'palavra_chave')
+    .eq('ativo', true);
   taxonomia = termos.map(t => ({ ...t, termo_norm: normalizar(t.termo) })).filter(t => t.termo_norm.length >= 3);
 
   await popularFiltroTipoNorma();
