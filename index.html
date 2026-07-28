@@ -448,7 +448,9 @@ function limitePalavras(){ return config.limite_palavras_chave || 6; }
 
 function renderFicha(){
   const sug = sugerirPalavras();
-  const relsAlt = relAtual.filter(r => ['altera','revoga','regulamenta','retifica'].includes(r.tipo));
+  // lista aberta de propósito: tipo novo no banco não pode sumir da tela por esquecimento
+  // de atualizar um filtro — foi o que aconteceu quando 'revoga_parcialmente' surgiu
+  const relsAlt = relAtual;
   const cheioA = selAssuntos.length >= limiteAssuntos();
   const cheioP = selPalavras.length >= limitePalavras();
 
@@ -723,8 +725,11 @@ function campoRegime(){
 function renderRel(r){
   const souOrigem = r.origem_id === docAtual.id;
   const outro = outraPonta(r);
-  const passiva = { altera:'alterada', revoga:'revogada', regulamenta:'regulamentada', retifica:'retificada' };
-  const frase = souOrigem ? `Esta norma <b>${r.tipo}</b>`
+  const passiva = { altera:'alterada', revoga:'revogada', revoga_parcialmente:'revogada em parte',
+                    regulamenta:'regulamentada', retifica:'retificada' };
+  const ativa = { altera:'altera', revoga:'revoga', revoga_parcialmente:'revoga em parte',
+                  regulamenta:'regulamenta', retifica:'retifica' };
+  const frase = souOrigem ? `Esta norma <b>${ativa[r.tipo] || r.tipo}</b>`
                           : `Esta norma <b>foi ${passiva[r.tipo] || r.tipo}</b> por`;
   const d = decisoesRel[r.id];
   const disp = (r.dispositivos_afetados||[]).length ? ` <span class="cnt">(${r.dispositivos_afetados.join(', ')})</span>` : '';
@@ -832,7 +837,14 @@ async function salvar(){
     legislacao_relacionada_titulos: relacionadas.map(x => x.titulo),
     legislacao_sem_cadastro: semId,
     ato_alteracao: idsDe(r => r.tipo==='altera' && r.origem_id===docAtual.id, r => r.destino_id),
+    // Só revogação TOTAL entra em "Ato de Revogação". Revogação parcial ali dentro faria a
+    // norma constar como revogada quando ela segue vigente com um ou dois artigos a menos —
+    // é o erro encontrado na Portaria 7.081. Vai para campo próprio e para legislação relacionada.
     ato_revogacao: idsDe(r => r.tipo==='revoga' && r.destino_id===docAtual.id, r => r.origem_id),
+    revogacao_parcial: idsDe(r => r.tipo==='revoga_parcialmente' && r.destino_id===docAtual.id, r => r.origem_id),
+    dispositivos_revogados: [...new Set(confirmadas
+      .filter(r => r.tipo==='revoga_parcialmente' && r.destino_id===docAtual.id)
+      .flatMap(r => r.dispositivos_afetados || []))],
     norma_regulamentacao: idsDe(r => r.tipo==='regulamenta', r => r.destino_id)
   });
 
