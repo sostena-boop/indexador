@@ -95,9 +95,15 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
 .no.folha { font-weight:600; }
 .no.sel { background:var(--accent); color:#fff; }
 .no.sel .cod { color:#cfe3da; }
-.no .seta { width:14px; flex:none; color:var(--muted); font-size:10px; cursor:pointer; user-select:none; }
-.no .seta:hover { color:var(--accent-dark); }
+/* alvo de clique generoso: o triângulo é discreto, mas a área perdoa imprecisão */
+.no { min-height:26px; }
+.no .seta { width:26px; height:22px; flex:none; color:var(--muted); font-size:15px; cursor:pointer;
+  user-select:none; display:inline-flex; align-items:center; justify-content:center; border-radius:5px;
+  margin-right:2px; }
+.no .seta:hover { color:#fff; background:var(--accent); }
 .no.sel .seta { color:#cfe3da; }
+.no .seta.vazia { cursor:default; }
+.no .seta.vazia:hover { background:none; }
 
 .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:20px; background:var(--ok-bg);
   color:var(--accent-dark); font-size:12.5px; font-weight:600; margin:0 6px 6px 0; }
@@ -155,17 +161,34 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
         <h2 class="sec">Fila de revisão</h2>
         <div class="barra">
           <select id="fEstagio" onchange="carregarFila()">
-            <option value="aguardando_cogec">Aguardando COGEC</option>
-            <option value="aguardando_esp1">Aguardando especialista 1</option>
-            <option value="aguardando_esp2">Aguardando especialista 2</option>
-            <option value="concluido">Concluídos</option>
+            <option value="aguardando_esp1">A indexar — ninguém pegou ainda</option>
+            <option value="aguardando_esp2">A conferir — já indexadas por um especialista</option>
+            <option value="concluido">Prontas — conferidas pelos dois</option>
           </select>
           <select id="fTipo" onchange="carregarFila()"><option value="">Todos os tipos</option></select>
           <label style="font-size:13px;display:flex;gap:6px;align-items:center">
             <input type="checkbox" id="fTexto" checked onchange="carregarFila()"> só com texto integral
           </label>
           <button class="b sec" onclick="exportarCSV()">Exportar CSV</button>
+          <button class="b sec" onclick="document.getElementById('novaNorma').classList.toggle('hidden')">+ norma fora do Memória SPU</button>
           <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
+        </div>
+        <div id="novaNorma" class="hidden" style="border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff">
+          <h3 class="blo" style="margin-top:0">Norma que ainda não está no Memória SPU</h3>
+          <div class="ajuda" style="margin-bottom:10px">O texto é lido no seu próprio navegador — o arquivo não é enviado a lugar nenhum. A norma entra na fila e fica marcada como pendente de cadastro no Tainacan.</div>
+          <div class="campo"><label>Título</label><input type="text" id="nnTitulo" placeholder="Portaria SPU/MGI nº 0.000, de 1º de janeiro de 2026"></div>
+          <div class="barra">
+            <select id="nnTipo">
+              <option>Portaria</option><option>Portaria Conjunta</option><option>Portaria Interministerial</option>
+              <option>Instrução Normativa</option><option>Orientação Normativa</option>
+              <option>Circular</option><option>Resolução</option><option>Retificação</option>
+            </select>
+            <input type="text" id="nnNumero" placeholder="número" style="width:110px">
+            <input type="text" id="nnAno" placeholder="ano" style="width:80px">
+            <input type="file" id="nnPdf" accept="application/pdf">
+            <button class="b" onclick="inserirNorma()">inserir e abrir</button>
+          </div>
+          <div id="nnMsg" style="font-size:12.5px;color:var(--muted)"></div>
         </div>
         <div id="filaBox"><div class="vazio">carregando…</div></div>
       </div>
@@ -193,7 +216,11 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 let usuario = null, colecaoId = null, config = {};
 let arvore = [], porId = {}, palavras = [], regimes = [], docAtual = null, relAtual = [];
 let selAssuntos = [], selPalavras = [], decisoesRel = {}, campos = {};
-let estagioAtual = 'cogec';
+let estagioAtual = 'esp1';
+// O resultado da ferramenta serve para refinar a taxonomia e as regras de indexação.
+// Por isso o que foi RECUSADO importa tanto quanto o aceito — foi assim que se mediu a
+// taxa de aceite de 10% em julho. Guardar só os aceitos jogaria fora o sinal de calibração.
+let rejeitadas = [], propostasNovas = [], buscaPalavra = '';
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
 // Nome de órgão não é conteúdo da norma: sem esta máscara, "Patrimônio" e "União" batem
@@ -288,8 +315,9 @@ async function carregarFila(){
 async function abrir(id){
   const { data: d } = await sb.from('documentos').select('*').eq('id', id).single();
   docAtual = d;
-  estagioAtual = { aguardando_cogec:'cogec', aguardando_esp1:'esp1', aguardando_esp2:'esp2' }[d.status] || 'esp1';
+  estagioAtual = d.status === 'aguardando_esp2' ? 'esp2' : 'esp1';
   selAssuntos = []; selPalavras = []; decisoesRel = {}; campos = {};
+  rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
 
   // ficha já registrada em estágio anterior serve de ponto de partida
   const { data: ants } = await sb.from('etapas_revisao').select('*').eq('documento_id', id);
@@ -393,16 +421,44 @@ function renderFicha(){
         : '<span class="vazio">nenhuma</span>'}</div>
       ${cheioP ? '<div class="ajuda" style="color:var(--bad)">Limite atingido.</div>' : ''}
     </div>
-    <div style="max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px">
-      ${sug.length ? sug.slice(0,40).map(s => `
-        <div class="termo">
-          <input type="checkbox" ${selPalavras.includes(s.termo)?'checked':''}
-                 ${(!selPalavras.includes(s.termo) && cheioP)?'disabled':''}
-                 onchange="alternarPalavra('${esc(s.termo).replace(/'/g,"\\'")}')">
-          <span style="flex:1">${esc(s.termo)}</span>
-          <span class="badge ${s.cabeca?'em':''}">${s.cabeca?'ementa/Art. 1º':'só no corpo'}</span>
-          <span class="cnt">×${s.n}</span>
-        </div>`).join('') : '<div class="vazio">Nenhum termo da taxonomia ocorre neste texto.</div>'}
+    <div class="campo" style="margin-bottom:8px">
+      <label>Sugeridas — ocorrem no texto</label>
+      <div style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px">
+        ${sug.length ? sug.slice(0,40).map(s => `
+          <div class="termo">
+            <input type="checkbox" ${selPalavras.includes(s.termo)?'checked':''}
+                   ${(!selPalavras.includes(s.termo) && cheioP)?'disabled':''}
+                   onchange="alternarPalavra('${esc(s.termo).replace(/'/g,"\\'")}')">
+            <span style="flex:1">${esc(s.termo)}</span>
+            <span class="badge ${s.cabeca?'em':''}">${s.cabeca?'ementa/Art. 1º':'só no corpo'}</span>
+            <span class="cnt">×${s.n}</span>
+          </div>`).join('') : '<div class="vazio">Nenhum termo da taxonomia ocorre neste texto.</div>'}
+      </div>
+    </div>
+
+    <div class="campo">
+      <label>Buscar no vocabulário inteiro — ${palavras.length} termos</label>
+      <input type="text" id="buscaPc" value="${esc(buscaPalavra)}" placeholder="digite parte do termo"
+             oninput="buscarPalavra(this.value)" autocomplete="off">
+      <div class="ajuda">Para termos corretos que a norma não escreve com essas palavras — a sugestão automática nunca os encontra.</div>
+      ${buscaPalavra.length >= 2 ? `
+        <div style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
+          ${resultadosBusca().length ? resultadosBusca().slice(0,30).map(r => `
+            <div class="termo">
+              <input type="checkbox" ${selPalavras.includes(r.termo)?'checked':''}
+                     ${(!selPalavras.includes(r.termo) && cheioP)?'disabled':''}
+                     onchange="alternarPalavra('${esc(r.termo).replace(/'/g,"\\'")}')">
+              <span style="flex:1">${esc(r.termo)}</span>
+              <span class="cnt">${esc(r.categoria||'')}</span>
+            </div>`).join('')
+          : `<div class="vazio" style="padding:8px">
+               Nenhum termo do vocabulário casa com “${esc(buscaPalavra)}”.
+               <button class="b sec" style="margin-left:8px" onclick="proporTermo()">propor como termo novo</button>
+             </div>`}
+        </div>` : ''}
+      ${propostasNovas.length ? `<div class="ajuda" style="margin-top:6px">
+        Propostos como novos: ${propostasNovas.map(p => `<span class="chip cheio">${esc(p)}
+        <button onclick="tirarProposta('${esc(p).replace(/'/g,"\\'")}')">×</button></span>`).join('')}</div>` : ''}
     </div>
 
     <h3 class="blo">Situação e vigência</h3>
@@ -502,8 +558,44 @@ function selecionarNo(id){
 }
 function tirarAssunto(id){ selAssuntos = selAssuntos.filter(x => x !== id); renderFicha(); }
 function alternarPalavra(t){
-  if (selPalavras.includes(t)) selPalavras = selPalavras.filter(x => x !== t);
-  else if (selPalavras.length < limitePalavras()) selPalavras.push(t);
+  if (selPalavras.includes(t)) {
+    selPalavras = selPalavras.filter(x => x !== t);
+  } else if (selPalavras.length < limitePalavras()) {
+    selPalavras.push(t);
+    rejeitadas = rejeitadas.filter(x => x !== t);
+  }
+  renderFicha(); renderDoc();
+}
+/* Busca no vocabulário inteiro. Prefixo primeiro, depois qualquer posição: quem procura
+   "destinação" precisa encontrar "Regime de destinação", mas quem digita "re" espera ver
+   antes as que começam com "re". */
+function resultadosBusca(){
+  const q = norm(buscaPalavra.trim());
+  if (q.length < 2) return [];
+  const comeca = palavras.filter(p => p.n.startsWith(q));
+  const contem = palavras.filter(p => !p.n.startsWith(q) && p.n.includes(q));
+  return comeca.concat(contem);
+}
+function buscarPalavra(v){
+  buscaPalavra = v;
+  const f = document.getElementById('ficha');
+  const pos = f.scrollTop;
+  renderFicha();
+  f.scrollTop = pos;
+  const cx = document.getElementById('buscaPc');
+  if (cx) { cx.focus(); cx.setSelectionRange(v.length, v.length); }
+}
+function proporTermo(){
+  const t = buscaPalavra.trim();
+  if (!t || propostasNovas.includes(t)) return;
+  propostasNovas.push(t);
+  if (selPalavras.length < limitePalavras()) selPalavras.push(t);
+  buscaPalavra = '';
+  renderFicha(); renderDoc();
+}
+function tirarProposta(t){
+  propostasNovas = propostasNovas.filter(x => x !== t);
+  selPalavras = selPalavras.filter(x => x !== t);
   renderFicha(); renderDoc();
 }
 function tirarPalavra(t){ selPalavras = selPalavras.filter(x => x !== t); renderFicha(); renderDoc(); }
@@ -587,7 +679,24 @@ async function salvar(){
       .map(r => r.destino ? r.destino.titulo : r.destino_referencia).filter(Boolean).join(' || ')
   });
 
-  const termos = selPalavras.map(t => ({ termo:t, decisao:'aceito' }));
+  /* Registro para calibração. Sem distinguir estes quatro casos não dá para responder
+     depois: que termos o motor sugere e ninguém quer; que termos o especialista procura
+     à mão e portanto a sugestão devia achar sozinha; que termos faltam na taxonomia. */
+  const sugeridos = sugerirPalavras();
+  const nomesSug = sugeridos.map(s => s.termo);
+  const termos = [];
+  sugeridos.forEach(s => termos.push({
+    termo: s.termo,
+    sugestao_automatica: true,
+    ocorrencias: s.n,
+    na_ementa: s.cabeca,
+    decisao: selPalavras.includes(s.termo) ? 'aceito' : 'rejeitado'
+  }));
+  selPalavras.filter(t => !nomesSug.includes(t)).forEach(t => termos.push({
+    termo: t,
+    sugestao_automatica: false,
+    decisao: propostasNovas.includes(t) ? 'proposto_novo' : 'buscado_manualmente'
+  }));
 
   const { error } = await sb.from('etapas_revisao').insert({
     documento_id: docAtual.id, estagio: estagioAtual, usuario_id: usuario.id,
@@ -602,7 +711,73 @@ async function salvar(){
       }).eq('id', r.id);
     }
   }
+  // termos fora da taxonomia viram proposta formal, para a curadoria decidir
+  for (const p of propostasNovas) {
+    await sb.from('propostas_regra').insert({
+      colecao_id: colecaoId, usuario_id: usuario.id,
+      titulo: 'Termo novo: ' + p,
+      descricao: 'Proposto durante a indexação de "' + docAtual.titulo + '". Não consta do vocabulário.'
+    });
+  }
   voltar();
+}
+
+/* ---------- norma nova, fora do Memória SPU ----------
+   Extração pelo pdf.js, no próprio navegador: o arquivo não sai da máquina e não é preciso
+   servidor nenhum. Buscar por LINK (Planalto, Imprensa Nacional) exigiria um intermediário,
+   porque CORS e robots bloqueiam a chamada direta de uma página estática. */
+async function inserirNorma(){
+  const msg = document.getElementById('nnMsg');
+  const titulo = document.getElementById('nnTitulo').value.trim();
+  if (!titulo) { msg.textContent = 'Informe o título.'; return; }
+  const arq = document.getElementById('nnPdf').files[0];
+  let texto = null;
+  if (arq) {
+    msg.textContent = 'Lendo o PDF…';
+    try { texto = await lerPdf(arq); }
+    catch(e) { msg.textContent = 'Não consegui ler o PDF: ' + e.message; return; }
+    if (texto && texto.replace(/\s/g,'').length < 200) {
+      msg.textContent = 'O PDF não tem camada de texto (parece digitalizado). A norma será criada sem texto integral.';
+      texto = null;
+    }
+  }
+  const { data, error } = await sb.from('documentos').insert({
+    colecao_id: colecaoId, titulo,
+    tipo_norma: document.getElementById('nnTipo').value,
+    numero_norma: document.getElementById('nnNumero').value.trim() || null,
+    ano_publicacao: parseInt(document.getElementById('nnAno').value) || null,
+    texto, fonte: texto ? 'pdf_enviado' : null,
+    status: 'aguardando_esp1',
+    diagnostico_extracao: texto ? 'limpo' : 'sem_documento_fonte'
+  }).select().single();
+  if (error) { msg.textContent = 'Erro: ' + error.message; return; }
+  await sb.from('itens_sem_cadastro').insert({
+    titulo, origem: 'indexador',
+    observacao: 'Inserida pelo Indexador por ' + usuario.nome + '. Pendente de cadastro no Tainacan.'
+  });
+  msg.textContent = '';
+  document.getElementById('novaNorma').classList.add('hidden');
+  abrir(data.id);
+}
+async function lerPdf(arq){
+  if (!window.pdfjsLib) {
+    await new Promise((ok, err) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
+      s.onload = ok; s.onerror = () => err(new Error('não carregou o leitor de PDF'));
+      document.head.appendChild(s);
+    });
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  }
+  const buf = await arq.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const partes = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const c = await (await pdf.getPage(i)).getTextContent();
+    partes.push(c.items.map(x => x.str).join(' '));
+  }
+  return partes.join('\n');
 }
 
 /* ---------- export ---------- */
