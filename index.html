@@ -478,9 +478,19 @@ function renderFicha(){
     <div class="ajuda" style="margin-bottom:10px">Detectadas na ementa e no Art. 1º. Confirme uma a uma — o trecho que originou cada detecção está à vista.</div>
     ${relsAlt.length ? relsAlt.map(r => renderRel(r)).join('') : '<div class="vazio">Nenhuma relação detectada para esta norma.</div>'}
 
-    <div class="campo" style="margin-top:16px"><label>Legislação relacionada — livre, separe com ||</label>
-      <textarea rows="2" onchange="setCampo('legislacao_relacionada',this.value)">${esc(campos.legislacao_relacionada||'')}</textarea>
-      <div class="ajuda">Vale para todas as normas. As relações confirmadas acima entram automaticamente.</div></div>
+    <div class="campo" style="margin-top:16px">
+      <label>Legislação relacionada</label>
+      <div style="border:1px solid var(--line);border-radius:10px;background:#fff;padding:9px 11px">
+        ${legisDasRelacoes().length ? legisDasRelacoes().map(x =>
+            `<span class="chip">${esc(x)}</span>`).join('')
+          : '<span class="vazio">Confirme as relações acima para preencher aqui.</span>'}
+      </div>
+      <div class="ajuda">Preenchido pelas relações que você confirmou — alteração, revogação e regulamentação, nos dois sentidos.</div>
+    </div>
+    <div class="campo"><label>Acrescentar à mão — separe com ||</label>
+      <textarea rows="2" placeholder="normas relacionadas que não apareceram acima"
+        onchange="setCampo('legislacao_manual',this.value)">${esc(campos.legislacao_manual||'')}</textarea>
+      <div class="ajuda">No export, isto se junta às confirmadas acima, num campo só.</div></div>
 
     <div class="campo"><label>Observações</label>
       <textarea rows="2" onchange="setCampo('observacoes',this.value)">${esc(campos.observacoes||'')}</textarea></div>
@@ -637,9 +647,10 @@ function campoRegime(){
 
 function renderRel(r){
   const souOrigem = r.origem_id === docAtual.id;
-  const outro = souOrigem ? (r.destino ? r.destino.titulo : r.destino_referencia)
-                          : (r.origem ? r.origem.titulo : r.origem_referencia);
-  const frase = souOrigem ? `Esta norma <b>${r.tipo}</b>` : `Esta norma <b>foi ${r.tipo === 'altera' ? 'alterada' : r.tipo + 'da'}</b> por`;
+  const outro = outraPonta(r);
+  const passiva = { altera:'alterada', revoga:'revogada', regulamenta:'regulamentada', retifica:'retificada' };
+  const frase = souOrigem ? `Esta norma <b>${r.tipo}</b>`
+                          : `Esta norma <b>foi ${passiva[r.tipo] || r.tipo}</b> por`;
   const d = decisoesRel[r.id];
   const disp = (r.dispositivos_afetados||[]).length ? ` <span class="cnt">(${r.dispositivos_afetados.join(', ')})</span>` : '';
   return `<div class="rel ${r.confianca < 0.7 ? 'ocr':''}">
@@ -654,18 +665,25 @@ function renderRel(r){
 }
 function decidirRel(id, v){ decisoesRel[id] = decisoesRel[id] === v ? undefined : v; renderFicha(); }
 
+/* O rótulo da outra ponta da relação. Quando esta norma é a origem, interessa o destino;
+   quando ela é o destino (foi alterada/revogada por alguém), interessa a origem. */
+function outraPonta(r){
+  const souOrigem = r.origem_id === docAtual.id;
+  return souOrigem ? (r.destino ? r.destino.titulo : r.destino_referencia)
+                   : (r.origem ? r.origem.titulo : r.origem_referencia);
+}
+function legisDasRelacoes(){
+  return [...new Set(relAtual.filter(r => decisoesRel[r.id] === 'confirmada')
+                             .map(outraPonta).filter(Boolean))];
+}
+
 /* ---------- salvar ---------- */
 async function salvar(){
   if (!selAssuntos.length) { if (!confirm('Nenhum assunto selecionado. Salvar assim mesmo?')) return; }
 
   const confirmadas = relAtual.filter(r => decisoesRel[r.id] === 'confirmada');
-  const rotulos = confirmadas.map(r => {
-    const souOrigem = r.origem_id === docAtual.id;
-    return souOrigem ? (r.destino ? r.destino.titulo : r.destino_referencia)
-                     : (r.origem ? r.origem.titulo : r.origem_referencia);
-  }).filter(Boolean);
-  const jaTem = (campos.legislacao_relacionada||'').split('||').map(s=>s.trim()).filter(Boolean);
-  const legis = [...new Set(jaTem.concat(rotulos))].join(' || ');
+  const manual = (campos.legislacao_manual||'').split('||').map(s=>s.trim()).filter(Boolean);
+  const legis = [...new Set(legisDasRelacoes().concat(manual))].join(' || ');
 
   const fichaFinal = Object.assign({}, campos, {
     assuntos: selAssuntos,
