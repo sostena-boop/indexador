@@ -191,7 +191,7 @@ const SUPABASE_KEY = 'sb_publishable_BusrfNtoSHQPAEygeJgP3w_3YGZTBt9';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let usuario = null, colecaoId = null, config = {};
-let arvore = [], porId = {}, palavras = [], docAtual = null, relAtual = [];
+let arvore = [], porId = {}, palavras = [], regimes = [], docAtual = null, relAtual = [];
 let selAssuntos = [], selPalavras = [], decisoesRel = {}, campos = {};
 let estagioAtual = 'cogec';
 
@@ -241,6 +241,13 @@ async function carregarBase(){
   arvore = (nos||[]).sort((a,b) => (a.codigo_tt||'').localeCompare(b.codigo_tt||''));
   arvore.forEach(n => porId[n.id] = n);
   arvore.forEach(n => n.folha = !arvore.some(f => f.pai_id === n.id));
+
+  // TT-02 — Regimes de Destinação Imobiliária (Resolução COMGC/SPU/MGI nº 5, de 24/10/2025).
+  // A tabela estava no anexo de uma norma da própria coleção.
+  const { data: regs } = await sb.from('taxonomia')
+    .select('id,termo,codigo_tt,nivel,caminho,definicao,instrumento')
+    .eq('colecao_id', colecaoId).eq('tipo','regime').eq('ativo', true);
+  regimes = (regs||[]).sort((a,b) => (a.codigo_tt||'').localeCompare(b.codigo_tt||''));
 
   const { data: pcs } = await sb.from('taxonomia')
     .select('id,termo,categoria,no_assunto_id,regra_matching')
@@ -517,11 +524,22 @@ function campoRegime(){
   const temDestinacao = cods.some(c => c.startsWith('03.04.02'));
   const temAquisicao  = cods.some(c => c.startsWith('03.02'));
   let html = '';
-  if (temDestinacao) html += `<div class="campo"><label>Regime de destinação</label>
-    <input type="text" value="${esc(campos.regime_destinacao||'')}" onchange="setCampo('regime_destinacao',this.value)">
-    <div class="ajuda">Lista controlada pendente: depende da Tabela Taxonômica 02/2025 de Regimes de Destinação.</div></div>`;
+  if (temDestinacao) {
+    const atual = campos.regime_destinacao || '';
+    const r = regimes.find(x => x.termo === atual);
+    html += `<div class="campo"><label>Regime de destinação — TT-02</label>
+      <select onchange="setCampo('regime_destinacao',this.value); renderFicha()">
+        <option value="">—</option>
+        ${regimes.map(x => `<option value="${esc(x.termo)}" ${atual===x.termo?'selected':''}>
+          ${'  '.repeat(Math.max(0,x.nivel-1))}${esc(x.codigo_tt)} · ${esc(x.termo)}</option>`).join('')}
+      </select>
+      ${r ? `<div class="ajuda">${esc((r.definicao||'').slice(0,220))}${
+        r.instrumento ? `<br><b>Instrumento:</b> ${esc(r.instrumento)}` : ''}</div>` : ''}
+      <div class="ajuda">Resolução COMGC/SPU/MGI nº 5, de 24/10/2025.</div></div>`;
+  }
   if (temAquisicao) html += `<div class="campo"><label>Regime de aquisição</label>
-    <input type="text" value="${esc(campos.regime_aquisicao||'')}" onchange="setCampo('regime_aquisicao',this.value)"></div>`;
+    <input type="text" value="${esc(campos.regime_aquisicao||'')}" onchange="setCampo('regime_aquisicao',this.value)">
+    <div class="ajuda">Sem tabela taxonômica própria — texto livre por ora.</div></div>`;
   return html || '<div class="vazio">Aparece conforme o assunto escolhido — regime de destinação em 03.04.02, regime de aquisição em 03.02.</div>';
 }
 
