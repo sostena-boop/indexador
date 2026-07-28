@@ -79,7 +79,14 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
 .split { display:grid; grid-template-columns: 1fr 1fr; gap:18px; align-items:start; }
 @media (max-width:1100px) { .split { grid-template-columns:1fr; } }
 .doc { max-height:74vh; overflow:auto; font-size:13.5px; line-height:1.75; white-space:pre-wrap; }
-.doc mark { background:var(--mark); padding:0 2px; }
+.doc mark { padding:0 2px; border-radius:3px; }
+.doc mark.sug { background:var(--mark); }                       /* sugerida, ainda não decidida */
+.doc mark.esc { background:#f5c542; box-shadow:0 0 0 1px #d9a520; }  /* já escolhida */
+.doc mark.piscando { animation:pisca .7s ease-in-out 2; }
+@keyframes pisca { 0%,100%{background:#f5c542} 50%{background:var(--terra);color:#fff} }
+.termo .lupa { border:none; background:none; cursor:pointer; color:var(--accent); font-size:13px;
+  padding:2px 6px; border-radius:6px; }
+.termo .lupa:hover { background:var(--ok-bg); }
 .ficha { max-height:74vh; overflow:auto; }
 
 .campo { margin-bottom:14px; }
@@ -165,6 +172,8 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
             <option value="aguardando_esp2">A conferir — já indexadas por um especialista</option>
             <option value="concluido">Prontas — conferidas pelos dois</option>
           </select>
+          <input type="text" id="fTitulo" placeholder="buscar por título ou número" style="width:250px"
+                 oninput="carregarFila()" autocomplete="off">
           <select id="fTipo" onchange="carregarFila()"><option value="">Todos os tipos</option></select>
           <label style="font-size:13px;display:flex;gap:6px;align-items:center">
             <input type="checkbox" id="fTexto" checked onchange="carregarFila()"> só com texto integral
@@ -222,6 +231,7 @@ let estagioAtual = 'esp1';
 // taxa de aceite de 10% em julho. Guardar só os aceitos jogaria fora o sinal de calibração.
 let rejeitadas = [], propostasNovas = [], buscaPalavra = '';
 let acervo = [], docsPorId = {}, legisManuais = [], buscaLegis = '';
+let ocorrenciaAtual = {};   // por termo, qual ocorrência mostrar no próximo clique
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
 // Nome de órgão não é conteúdo da norma: sem esta máscara, "Patrimônio" e "União" batem
@@ -284,11 +294,11 @@ async function carregarBase(){
 
   // acervo inteiro em memória, para a busca de legislação relacionada responder instantânea
   const { data: todos } = await sb.from('documentos')
-    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,texto')
+    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,public_url')
     .eq('colecao_id', colecaoId).limit(1200);
   acervo = (todos || []).map(d => ({
     id:d.id, titulo:d.titulo, tipo_norma:d.tipo_norma, ano_publicacao:d.ano_publicacao,
-    item_id_tainacan:d.item_id_tainacan,
+    item_id_tainacan:d.item_id_tainacan, public_url:d.public_url,
     // registros problemáticos do acervo: atalho .url cadastrado como se fosse a norma,
     // e itens sem nenhum arquivo. Aparecem na busca, mas por último e sinalizados —
     // relacionar a norma errada gera link para documento vazio no Tainacan.
@@ -306,23 +316,35 @@ async function carregarFila(){
   const st = document.getElementById('fEstagio').value;
   const tipo = document.getElementById('fTipo').value;
   const soTexto = document.getElementById('fTexto').checked;
+  const busca = (document.getElementById('fTitulo').value || '').trim();
   let q = sb.from('documentos')
     .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma', { count:'exact' })
-    .eq('colecao_id', colecaoId).eq('status', st).order('ordem_fila', { ascending:true }).limit(120);
+    .eq('colecao_id', colecaoId).order('ordem_fila', { ascending:true }).limit(120);
+  // buscando por título, o estágio deixa de filtrar: quem procura uma norma específica
+  // quer encontrá-la esteja ela em que fila estiver
+  if (!busca) q = q.eq('status', st);
+  else q = q.or(`titulo.ilike.%${busca}%,numero_norma.ilike.%${busca}%`);
   if (tipo) q = q.eq('tipo_norma', tipo);
   if (soTexto) q = q.not('texto','is',null);
   const { data, count } = await q;
   const linhas = data || [];
-  document.getElementById('filaInfo').textContent = `${linhas.length} exibidos de ${count||0}`;
+  const est = { aguardando_esp1:['esp1','a indexar'], aguardando_esp2:['esp2','a conferir'],
+                concluido:['fim','pronta'], duplicado_excluir:['fim','duplicada'] };
+  document.getElementById('filaInfo').textContent =
+    (busca ? `${linhas.length} encontrados` : `${linhas.length} exibidos`) + ` de ${count||0}`;
   document.getElementById('filaBox').innerHTML = linhas.length ? `
-    <table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Texto</th><th></th></tr></thead><tbody>
-    ${linhas.map(d => `<tr>
+    <table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Situação</th><th>Texto</th><th></th></tr></thead><tbody>
+    ${linhas.map(d => {
+      const e = est[d.status] || ['fim', d.status];
+      return `<tr>
       <td><a onclick="abrir('${d.id}')">${esc(d.titulo)}</a>
           ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}</td>
       <td>${esc(d.tipo_norma||'—')}</td><td>${d.ano_publicacao||'—'}</td>
+      <td><span class="pill ${e[0]}">${e[1]}</span></td>
       <td>${d.texto ? (d.texto.length > 400 ? 'integral' : 'curto') : '<span style="color:var(--bad)">sem texto</span>'}</td>
-      <td><button class="b sec" onclick="abrir('${d.id}')">revisar</button></td></tr>`).join('')}
-    </tbody></table>` : '<div class="vazio">Nada nesta fila.</div>';
+      <td><button class="b sec" onclick="abrir('${d.id}')">abrir</button></td></tr>`;
+    }).join('')}
+    </tbody></table>` : `<div class="vazio">${busca ? 'Nenhuma norma casa com essa busca.' : 'Nada nesta fila.'}</div>`;
 }
 
 /* ---------- documento ---------- */
@@ -332,6 +354,7 @@ async function abrir(id){
   estagioAtual = d.status === 'aguardando_esp2' ? 'esp2' : 'esp1';
   selAssuntos = []; selPalavras = []; decisoesRel = {}; campos = {};
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
+  legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
 
   // ficha já registrada em estágio anterior serve de ponto de partida
   const { data: ants } = await sb.from('etapas_revisao').select('*').eq('documento_id', id);
@@ -370,14 +393,34 @@ function cabeca(t){
   const m = t.match(/\bArt\.?\s*2[ºo]/);
   return (m && m.index > 400) ? t.slice(0, m.index) : t.slice(0, 2600);
 }
+/* Destaca no texto tanto as escolhidas quanto as apenas sugeridas, com tons diferentes:
+   quem revisa precisa ver onde o termo aparece ANTES de decidir se aceita. Cada ocorrência
+   recebe âncora, para o clique no nome do termo saltar até ela. */
 function renderDoc(){
-  let t = docAtual.texto || '(sem texto integral extraído)';
+  const t = docAtual.texto || '(sem texto integral extraído)';
   let html = esc(t);
-  selPalavras.forEach(p => {
+  const sugeridas = sugerirPalavras().map(s => s.termo);
+  const todas = [...new Set(selPalavras.concat(sugeridas))]
+                  .sort((a,b) => b.length - a.length);   // termo mais longo primeiro, para não partir o maior
+  todas.forEach(p => {
+    const escolhida = selPalavras.includes(p);
     const rx = new RegExp('(^|[^\\wÀ-ÿ])(' + escRx(esc(p)) + ')(?![\\wÀ-ÿ])', 'gi');
-    html = html.replace(rx, '$1<mark>$2</mark>');
+    let i = 0;
+    html = html.replace(rx, (m, antes, achado) =>
+      `${antes}<mark class="${escolhida?'esc':'sug'}" data-t="${esc(p)}" id="oc-${chaveTermo(p)}-${i++}">${achado}</mark>`);
   });
   document.getElementById('docTexto').innerHTML = html;
+}
+function chaveTermo(t){ return norm(t).replace(/[^a-z0-9]+/g,'-'); }
+function irParaOcorrencia(termo){
+  const alvos = document.querySelectorAll(`#docTexto mark[data-t="${CSS.escape(esc(termo))}"]`);
+  if (!alvos.length) return;
+  const atual = (ocorrenciaAtual[termo] || 0) % alvos.length;
+  ocorrenciaAtual[termo] = atual + 1;
+  const el = alvos[atual];
+  el.scrollIntoView({ block:'center', behavior:'smooth' });
+  el.classList.add('piscando');
+  setTimeout(() => el.classList.remove('piscando'), 1400);
 }
 
 /* ---------- sugestão de palavras-chave ---------- */
@@ -443,7 +486,10 @@ function renderFicha(){
             <input type="checkbox" ${selPalavras.includes(s.termo)?'checked':''}
                    ${(!selPalavras.includes(s.termo) && cheioP)?'disabled':''}
                    onchange="alternarPalavra('${esc(s.termo).replace(/'/g,"\\'")}')">
-            <span style="flex:1">${esc(s.termo)}</span>
+            <span style="flex:1;cursor:pointer" title="clique para ver no texto"
+                  onclick="irParaOcorrencia('${esc(s.termo).replace(/'/g,"\\'")}')">${esc(s.termo)}</span>
+            <button class="lupa" title="próxima ocorrência no texto"
+                    onclick="irParaOcorrencia('${esc(s.termo).replace(/'/g,"\\'")}')">⌖</button>
             <span class="badge ${s.cabeca?'em':''}">${s.cabeca?'ementa/Art. 1º':'só no corpo'}</span>
             <span class="cnt">×${s.n}</span>
           </div>`).join('') : '<div class="vazio">Nenhum termo da taxonomia ocorre neste texto.</div>'}
@@ -682,13 +728,22 @@ function renderRel(r){
                           : `Esta norma <b>foi ${passiva[r.tipo] || r.tipo}</b> por`;
   const d = decisoesRel[r.id];
   const disp = (r.dispositivos_afetados||[]).length ? ` <span class="cnt">(${r.dispositivos_afetados.join(', ')})</span>` : '';
+  const rotulo = { revoga:'revoga', revoga_parcialmente:'revoga em parte',
+                   altera:'altera', regulamenta:'regulamenta', retifica:'retifica' }[r.tipo] || r.tipo;
+  // link para abrir a norma relacionada no Memória SPU, em aba nova: conferir sem perder
+  // o que já foi preenchido nesta ficha
+  const idOutro = souOrigem ? r.destino_id : r.origem_id;
+  const dOutro = idOutro ? docsPorId[idOutro] : null;
+  const link = dOutro && dOutro.public_url
+    ? ` <a href="${esc(dOutro.public_url)}" target="_blank" rel="noopener"
+           title="abrir no Memória SPU, em aba nova" style="color:var(--accent);font-size:12px">abrir ↗</a>` : '';
   return `<div class="rel ${r.confianca < 0.7 ? 'ocr':''}">
-    <div class="cab"><span class="tp">${esc(r.tipo)}</span>
+    <div class="cab"><span class="tp">${esc(rotulo)}</span>
       <span class="acoes">
         <button class="sim ${d==='confirmada'?'on':''}" onclick="decidirRel('${r.id}','confirmada')">confirma</button>
         <button class="nao ${d==='rejeitada'?'on':''}" onclick="decidirRel('${r.id}','rejeitada')">não</button>
       </span></div>
-    <div>${frase} <b>${esc(outro||'(referência não resolvida)')}</b>${disp}</div>
+    <div>${frase} <b>${esc(outro||'(referência não resolvida)')}</b>${disp}${link}</div>
     <div class="ev">“${esc((r.evidencia||'').slice(0,240))}”</div>
   </div>`;
 }
