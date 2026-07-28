@@ -95,6 +95,9 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
 .no.folha { font-weight:600; }
 .no.sel { background:var(--accent); color:#fff; }
 .no.sel .cod { color:#cfe3da; }
+.no .seta { width:14px; flex:none; color:var(--muted); font-size:10px; cursor:pointer; user-select:none; }
+.no .seta:hover { color:var(--accent-dark); }
+.no.sel .seta { color:#cfe3da; }
 
 .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:20px; background:var(--ok-bg);
   color:var(--accent-dark); font-size:12.5px; font-weight:600; margin:0 6px 6px 0; }
@@ -366,9 +369,11 @@ function renderFicha(){
         <button onclick="tirarAssunto('${id}')">×</button></span>`).join('')
         : '<span class="vazio">nenhum — registre apenas o nível mais profundo</span>'}</div>
       ${cheioA ? '<div class="ajuda" style="color:var(--bad)">Limite atingido. Retire um para escolher outro.</div>' : ''}
-      <div class="ajuda">Registra-se só o nó mais profundo. Os ancestrais não entram, salvo escolha explícita.</div>
+      <div class="ajuda">Escolha o nível que corresponde ao que a norma trata — qualquer um serve, não precisa descer até a folha. Os ancestrais do que você escolher ficam implícitos e não são registrados.</div>
     </div>
+    ${avisoArvore ? `<div class="aviso">${esc(avisoArvore)}</div>` : ''}
     <div class="arvore" id="arvoreBox">${renderArvore()}</div>
+    <div class="ajuda" style="margin-top:5px">Clique na seta para abrir o ramo; clique no nome para escolher o assunto.</div>
 
     <h3 class="blo">Regime</h3>
     ${campoRegime()}
@@ -430,14 +435,18 @@ function renderFicha(){
 }
 
 let expandidos = new Set();
+let avisoArvore = '';
+
 function renderArvore(){
   return arvore.filter(n => n.nivel <= 1 || visivel(n)).map(n => {
     const sel = selAssuntos.includes(n.id);
     const temFilho = arvore.some(f => f.pai_id === n.id);
+    const seta = temFilho
+      ? `<span class="seta" onclick="event.stopPropagation();alternarNo('${n.id}')">${expandidos.has(n.id)?'▾':'▸'}</span>`
+      : '<span class="seta vazia"></span>';
     return `<div class="no ${n.folha?'folha':''} ${sel?'sel':''}" style="padding-left:${6 + (n.nivel-1)*16}px"
-      onclick="cliqueNo('${n.id}')" title="${esc((n.definicao||'').slice(0,300))}">
-      <span class="cod">${esc(n.codigo_tt)}</span>
-      <span>${temFilho ? (expandidos.has(n.id)?'▾ ':'▸ ') : ''}${esc(n.termo)}</span>
+      onclick="selecionarNo('${n.id}')" title="${esc((n.definicao||'').slice(0,300))}">
+      ${seta}<span class="cod">${esc(n.codigo_tt)}</span><span>${esc(n.termo)}</span>
     </div>`;
   }).join('');
 }
@@ -446,12 +455,42 @@ function visivel(n){
   while (p) { if (!expandidos.has(p.id)) return false; p = porId[p.pai_id]; }
   return true;
 }
-function cliqueNo(id){
-  const n = porId[id];
-  const temFilho = arvore.some(f => f.pai_id === id);
-  if (temFilho) { expandidos.has(id) ? expandidos.delete(id) : expandidos.add(id); renderFicha(); return; }
-  if (selAssuntos.includes(id)) selAssuntos = selAssuntos.filter(x => x !== id);
-  else if (selAssuntos.length < limiteAssuntos()) selAssuntos.push(id);
+function alternarNo(id){
+  expandidos.has(id) ? expandidos.delete(id) : expandidos.add(id);
+  renderFicha();
+}
+function ancestrais(id){
+  const out = []; let p = porId[(porId[id]||{}).pai_id];
+  while (p) { out.push(p.id); p = porId[p.pai_id]; }
+  return out;
+}
+function descendentes(id){
+  return arvore.filter(n => ancestrais(n.id).includes(id)).map(n => n.id);
+}
+/* Qualquer nível é selecionável, não só a folha: obrigar a descer até a folha produziria
+   precisão falsa — a pessoa escolheria um filho arbitrário só para conseguir salvar.
+   Escolhido um nó, os ancestrais dele saem: já estão implícitos no caminho. */
+function selecionarNo(id){
+  avisoArvore = '';
+  if (selAssuntos.includes(id)) { selAssuntos = selAssuntos.filter(x => x !== id); renderFicha(); return; }
+
+  const asc = ancestrais(id), desc = descendentes(id);
+  const redundantes = selAssuntos.filter(s => asc.includes(s));
+  if (redundantes.length) {
+    selAssuntos = selAssuntos.filter(s => !asc.includes(s));
+    avisoArvore = 'Removi ' + redundantes.map(r => porId[r].termo).join(', ') +
+                  ' — é ancestral do que você acabou de escolher e fica implícito no caminho.';
+  }
+  if (selAssuntos.some(s => desc.includes(s))) {
+    avisoArvore = 'Você já escolheu um assunto mais específico dentro deste ramo. ' +
+                  'Escolher o nó mais amplo junto não acrescenta — retire o específico se quiser trocar.';
+    renderFicha(); return;
+  }
+  if (selAssuntos.length >= limiteAssuntos()) {
+    avisoArvore = 'Limite de ' + limiteAssuntos() + ' assuntos atingido.';
+    renderFicha(); return;
+  }
+  selAssuntos.push(id);
   renderFicha();
 }
 function tirarAssunto(id){ selAssuntos = selAssuntos.filter(x => x !== id); renderFicha(); }
