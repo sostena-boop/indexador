@@ -284,8 +284,16 @@ async function carregarBase(){
 
   // acervo inteiro em memória, para a busca de legislação relacionada responder instantânea
   const { data: todos } = await sb.from('documentos')
-    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan').eq('colecao_id', colecaoId).limit(1200);
-  acervo = todos || [];
+    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,texto')
+    .eq('colecao_id', colecaoId).limit(1200);
+  acervo = (todos || []).map(d => ({
+    id:d.id, titulo:d.titulo, tipo_norma:d.tipo_norma, ano_publicacao:d.ano_publicacao,
+    item_id_tainacan:d.item_id_tainacan,
+    // registros problemáticos do acervo: atalho .url cadastrado como se fosse a norma,
+    // e itens sem nenhum arquivo. Aparecem na busca, mas por último e sinalizados —
+    // relacionar a norma errada gera link para documento vazio no Tainacan.
+    suspeito: /\.url$/i.test(d.titulo||'') || d.diagnostico_extracao === 'sem_documento_fonte'
+  }));
   acervo.forEach(d => docsPorId[d.id] = d);
 
   const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort();
@@ -504,8 +512,9 @@ function renderFicha(){
       ${buscaLegis.length >= 3 ? `
         <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
           ${resultadosNorma().length ? resultadosNorma().slice(0,25).map(d => `
-            <div class="termo" style="cursor:pointer" onclick="addLegis('${d.id}')">
+            <div class="termo" style="cursor:pointer${d.suspeito?';opacity:.62':''}" onclick="addLegis('${d.id}')">
               <span style="flex:1">${esc(d.titulo)}</span>
+              ${d.suspeito ? '<span class="badge" style="background:var(--bad-bg);color:var(--bad)">registro sem documento</span>' : ''}
               <span class="cnt">${d.item_id_tainacan ? '#'+d.item_id_tainacan : 'sem id'}</span>
             </div>`).join('')
           : '<div class="vazio" style="padding:8px">Nenhuma norma do acervo casa com essa busca.</div>'}
@@ -720,7 +729,10 @@ function legisTudo(){
 function resultadosNorma(){
   const q = norm(buscaLegis.trim());
   if (q.length < 3) return [];
-  return acervo.filter(d => d.id !== docAtual.id && norm(d.titulo).includes(q)).slice(0, 40);
+  return acervo.filter(d => d.id !== docAtual.id && norm(d.titulo).includes(q))
+               .sort((a,b) => (a.suspeito - b.suspeito) ||
+                              ((b.ano_publicacao||0) - (a.ano_publicacao||0)))
+               .slice(0, 40);
 }
 function buscarNorma(v){
   buscaLegis = v;
