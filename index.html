@@ -221,6 +221,7 @@ let estagioAtual = 'esp1';
 // Por isso o que foi RECUSADO importa tanto quanto o aceito — foi assim que se mediu a
 // taxa de aceite de 10% em julho. Guardar só os aceitos jogaria fora o sinal de calibração.
 let rejeitadas = [], propostasNovas = [], buscaPalavra = '';
+let acervo = [], docsPorId = {}, legisManuais = [], buscaLegis = '';
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
 // Nome de órgão não é conteúdo da norma: sem esta máscara, "Patrimônio" e "União" batem
@@ -281,8 +282,13 @@ async function carregarBase(){
     .eq('colecao_id', colecaoId).eq('tipo','palavra_chave').eq('ativo', true);
   palavras = (pcs||[]).map(t => ({...t, n: norm(t.termo)})).filter(t => t.n.length >= 3);
 
-  const { data: tipos } = await sb.from('documentos').select('tipo_norma').eq('colecao_id', colecaoId);
-  const uniq = [...new Set((tipos||[]).map(t => t.tipo_norma).filter(Boolean))].sort();
+  // acervo inteiro em memória, para a busca de legislação relacionada responder instantânea
+  const { data: todos } = await sb.from('documentos')
+    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan').eq('colecao_id', colecaoId).limit(1200);
+  acervo = todos || [];
+  acervo.forEach(d => docsPorId[d.id] = d);
+
+  const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort();
   document.getElementById('fTipo').innerHTML = '<option value="">Todos os tipos</option>' +
     uniq.map(t => `<option>${esc(t)}</option>`).join('');
 }
@@ -481,16 +487,30 @@ function renderFicha(){
     <div class="campo" style="margin-top:16px">
       <label>Legislação relacionada</label>
       <div style="border:1px solid var(--line);border-radius:10px;background:#fff;padding:9px 11px">
-        ${legisDasRelacoes().length ? legisDasRelacoes().map(x =>
-            `<span class="chip">${esc(x)}</span>`).join('')
-          : '<span class="vazio">Confirme as relações acima para preencher aqui.</span>'}
+        ${legisTudo().length ? legisTudo().map(x => `
+          <span class="chip ${x.item_id?'':'cheio'}" title="${x.item_id?('item '+x.item_id):'sem cadastro no Tainacan — não vira link'}">
+            ${esc(x.titulo)}${x.item_id?` <span class="cnt">#${x.item_id}</span>`:' ⚠'}
+            ${x.manual?`<button onclick="tirarLegis('${x.doc_id}')">×</button>`:''}
+          </span>`).join('')
+          : '<span class="vazio">Confirme as relações acima ou busque abaixo.</span>'}
       </div>
-      <div class="ajuda">Preenchido pelas relações que você confirmou — alteração, revogação e regulamentação, nos dois sentidos.</div>
+      <div class="ajuda">Vem das relações confirmadas, mais o que você buscar. O export grava o <b>id do item</b>, que é o que o Tainacan reconhece para montar o link.
+      ${legisTudo().some(x => !x.item_id) ? '<br><b style="color:var(--bad)">⚠ Os marcados não têm cadastro no Tainacan e não virarão link.</b>' : ''}</div>
     </div>
-    <div class="campo"><label>Acrescentar à mão — separe com ||</label>
-      <textarea rows="2" placeholder="normas relacionadas que não apareceram acima"
-        onchange="setCampo('legislacao_manual',this.value)">${esc(campos.legislacao_manual||'')}</textarea>
-      <div class="ajuda">No export, isto se junta às confirmadas acima, num campo só.</div></div>
+
+    <div class="campo"><label>Buscar norma no acervo para relacionar</label>
+      <input type="text" id="buscaNorma" value="${esc(buscaLegis)}" placeholder="digite parte do título ou o número"
+             oninput="buscarNorma(this.value)" autocomplete="off">
+      ${buscaLegis.length >= 3 ? `
+        <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
+          ${resultadosNorma().length ? resultadosNorma().slice(0,25).map(d => `
+            <div class="termo" style="cursor:pointer" onclick="addLegis('${d.id}')">
+              <span style="flex:1">${esc(d.titulo)}</span>
+              <span class="cnt">${d.item_id_tainacan ? '#'+d.item_id_tainacan : 'sem id'}</span>
+            </div>`).join('')
+          : '<div class="vazio" style="padding:8px">Nenhuma norma do acervo casa com essa busca.</div>'}
+        </div>` : ''}
+    </div>
 
     <div class="campo"><label>Observações</label>
       <textarea rows="2" onchange="setCampo('observacoes',this.value)">${esc(campos.observacoes||'')}</textarea></div>
@@ -672,9 +692,53 @@ function outraPonta(r){
   return souOrigem ? (r.destino ? r.destino.titulo : r.destino_referencia)
                    : (r.origem ? r.origem.titulo : r.origem_referencia);
 }
+/* O Tainacan grava campo de relacionamento como ID de item, não como título:
+   "204399||208827". Exportar o título quebraria a reimportação — nada seria reconhecido.
+   Por isso guarda-se o id do documento, mostra-se o título, e exporta-se item_id_tainacan.
+   Norma sem cadastro no Tainacan não tem id e portanto não vira link: fica sinalizada. */
 function legisDasRelacoes(){
-  return [...new Set(relAtual.filter(r => decisoesRel[r.id] === 'confirmada')
-                             .map(outraPonta).filter(Boolean))];
+  const out = [];
+  relAtual.filter(r => decisoesRel[r.id] === 'confirmada').forEach(r => {
+    const souOrigem = r.origem_id === docAtual.id;
+    const idOutro = souOrigem ? r.destino_id : r.origem_id;
+    const d = idOutro ? docsPorId[idOutro] : null;
+    out.push({ doc_id: idOutro || null,
+               titulo: outraPonta(r) || '(referência não resolvida)',
+               item_id: d ? d.item_id_tainacan : null, manual: false });
+  });
+  return out;
+}
+function legisTudo(){
+  const vistos = new Set(), out = [];
+  legisDasRelacoes().concat(legisManuais).forEach(x => {
+    const k = x.doc_id || x.titulo;
+    if (vistos.has(k)) return;
+    vistos.add(k); out.push(x);
+  });
+  return out;
+}
+function resultadosNorma(){
+  const q = norm(buscaLegis.trim());
+  if (q.length < 3) return [];
+  return acervo.filter(d => d.id !== docAtual.id && norm(d.titulo).includes(q)).slice(0, 40);
+}
+function buscarNorma(v){
+  buscaLegis = v;
+  const f = document.getElementById('ficha'), pos = f.scrollTop;
+  renderFicha(); f.scrollTop = pos;
+  const cx = document.getElementById('buscaNorma');
+  if (cx) { cx.focus(); cx.setSelectionRange(v.length, v.length); }
+}
+function addLegis(docId){
+  const d = docsPorId[docId];
+  if (!d || legisManuais.some(x => x.doc_id === docId)) return;
+  legisManuais.push({ doc_id: docId, titulo: d.titulo, item_id: d.item_id_tainacan, manual: true });
+  buscaLegis = '';
+  renderFicha();
+}
+function tirarLegis(docId){
+  legisManuais = legisManuais.filter(x => x.doc_id !== docId);
+  renderFicha();
 }
 
 /* ---------- salvar ---------- */
@@ -682,19 +746,27 @@ async function salvar(){
   if (!selAssuntos.length) { if (!confirm('Nenhum assunto selecionado. Salvar assim mesmo?')) return; }
 
   const confirmadas = relAtual.filter(r => decisoesRel[r.id] === 'confirmada');
-  const manual = (campos.legislacao_manual||'').split('||').map(s=>s.trim()).filter(Boolean);
-  const legis = [...new Set(legisDasRelacoes().concat(manual))].join(' || ');
+  const relacionadas = legisTudo();
+  // o campo de relacionamento do Tainacan recebe id de item; o título vai à parte,
+  // só para leitura humana no banco
+  const legisIds = relacionadas.filter(x => x.item_id).map(x => String(x.item_id));
+  const semId = relacionadas.filter(x => !x.item_id).map(x => x.titulo);
+
+  // idem para os três campos de relacionamento específicos: id, não título
+  const idsDe = (filtro, qualPonta) => [...new Set(confirmadas.filter(filtro)
+      .map(r => docsPorId[qualPonta(r)])
+      .filter(d => d && d.item_id_tainacan)
+      .map(d => String(d.item_id_tainacan)))].join('||');
 
   const fichaFinal = Object.assign({}, campos, {
     assuntos: selAssuntos,
     assuntos_caminho: selAssuntos.map(id => (porId[id]||{}).caminho || ''),
-    legislacao_relacionada: legis,
-    ato_alteracao: confirmadas.filter(r => r.tipo==='altera' && r.destino_id!==docAtual.id)
-      .map(r => r.destino ? r.destino.titulo : r.destino_referencia).filter(Boolean).join(' || '),
-    ato_revogacao: confirmadas.filter(r => r.tipo==='revoga' && r.origem_id!==docAtual.id)
-      .map(r => r.origem ? r.origem.titulo : r.origem_referencia).filter(Boolean).join(' || '),
-    norma_regulamentacao: confirmadas.filter(r => r.tipo==='regulamenta')
-      .map(r => r.destino ? r.destino.titulo : r.destino_referencia).filter(Boolean).join(' || ')
+    legislacao_relacionada: legisIds.join('||'),
+    legislacao_relacionada_titulos: relacionadas.map(x => x.titulo),
+    legislacao_sem_cadastro: semId,
+    ato_alteracao: idsDe(r => r.tipo==='altera' && r.origem_id===docAtual.id, r => r.destino_id),
+    ato_revogacao: idsDe(r => r.tipo==='revoga' && r.destino_id===docAtual.id, r => r.origem_id),
+    norma_regulamentacao: idsDe(r => r.tipo==='regulamenta', r => r.destino_id)
   });
 
   /* Registro para calibração. Sem distinguir estes quatro casos não dá para responder
