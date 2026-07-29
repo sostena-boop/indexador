@@ -207,7 +207,7 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
       <div class="barra">
         <button class="b sec" onclick="voltar()">← voltar para a fila</button>
         <span id="docTitulo" style="font-family:Fraunces,serif;font-weight:600;font-size:16px"></span>
-        <span id="docPills" style="margin-left:auto"></span>
+        <span id="docAcoes" style="margin-left:auto;display:flex;gap:8px;align-items:center"></span>
       </div>
       <div class="split">
         <div class="card"><div class="doc" id="docTexto"></div></div>
@@ -375,10 +375,18 @@ async function abrir(id){
   document.getElementById('telaFila').classList.add('hidden');
   document.getElementById('telaDoc').classList.remove('hidden');
   document.getElementById('docTitulo').textContent = d.titulo;
-  document.getElementById('docPills').innerHTML =
-    `<span class="pill ${estagioAtual}">${{cogec:'COGEC',esp1:'Especialista 1',esp2:'Especialista 2'}[estagioAtual]}</span>` +
+  // o botão de compilado só aparece quando há do que compilar: alteração registrada
+  // e dispositivos segmentados
+  const { count: nAlt } = await sb.from('relacoes_norma')
+    .select('id', { count:'exact', head:true }).eq('destino_id', id)
+    .in('tipo', ['altera','revoga_parcialmente']);
+  const { count: nDisp } = await sb.from('dispositivos')
+    .select('id', { count:'exact', head:true }).eq('documento_id', id);
+  document.getElementById('docAcoes').innerHTML =
+    `<span class="pill ${estagioAtual}">${{esp1:'Especialista 1',esp2:'Especialista 2'}[estagioAtual]}</span>` +
     (d.fonte === 'ocr' ? ' <span class="pill duv">texto de OCR — conferir números</span>' : '') +
-    (d.em_duvida ? ' <span class="pill duv">marcado com dúvida</span>' : '');
+    (d.em_duvida ? ' <span class="pill duv">marcado com dúvida</span>' : '') +
+    (nAlt && nDisp ? ` <button class="b" onclick="gerarCompilado()" title="${nAlt} alteração(ões) registrada(s)">gerar texto compilado (.docx)</button>` : '');
   renderDoc();
   renderFicha();
 }
@@ -947,6 +955,114 @@ async function lerPdf(arq){
     partes.push(c.items.map(x => x.str).join(' '));
   }
   return partes.join('\n');
+}
+
+/* ---------- texto compilado em .docx ----------
+   A publicação oficial não pode trazer a norma consolidada: a alteradora diz "o art. 5º
+   passa a vigorar com a seguinte redação" e ponto. Quem consulta tem de abrir a original e
+   cada alteradora em sequência. Isto monta esse trabalho num documento só.
+
+   Formatação copiada do modelo institucional: A4, margens de 2,5 cm, Calibri 12, título
+   centralizado, ementa recuada 9 cm, entrada de parágrafo de 2,5 cm.
+
+   O dispositivo revogado ou substituído aparece TACHADO, com a redação vigente ao lado —
+   é o que permite conferir o que mudou sem abrir as outras normas. */
+const TW = { margem:1417, recuoEmenta:5102, entrada:1417 };
+
+function xml(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function par(texto, o){
+  o = o || {};
+  const rPr = `<w:rPr>${o.negrito?'<w:b/>':''}${o.tachado?'<w:strike/>':''}` +
+              `${o.cor?`<w:color w:val="${o.cor}"/>`:''}<w:sz w:val="24"/></w:rPr>`;
+  const ind = o.recuo ? `<w:ind w:left="${o.recuo}"/>`
+                      : (o.entrada ? `<w:ind w:firstLine="${TW.entrada}"/>` : '');
+  return `<w:p><w:pPr><w:jc w:val="${o.jc||'both'}"/>${ind}` +
+         `<w:spacing w:after="${o.after===undefined?120:o.after}"/></w:pPr>` +
+         `<w:r>${rPr}<w:t xml:space="preserve">${xml(texto)}</w:t></w:r></w:p>`;
+}
+
+async function gerarCompilado(){
+  const alvo = docAtual;
+  const { data: rels } = await sb.from('relacoes_norma')
+    .select('origem_id,tipo,status').eq('destino_id', alvo.id)
+    .in('tipo', ['altera','revoga_parcialmente']);
+  if (!rels || !rels.length) { alert('Esta norma não tem alterações registradas.'); return; }
+
+  const origens = [...new Set(rels.map(r => r.origem_id))].filter(Boolean);
+  const { data: novas } = await sb.from('redacoes_novas').select('*').in('origem_id', origens);
+  const { data: disps } = await sb.from('dispositivos')
+    .select('ordem,tipo,rotulo,rotulo_normalizado,texto').eq('documento_id', alvo.id).order('ordem');
+  if (!disps || !disps.length) { alert('Esta norma ainda não foi segmentada por dispositivo.'); return; }
+
+  const porRotulo = {};
+  (novas||[]).forEach(n => { (porRotulo[n.rotulo_alvo] = porRotulo[n.rotulo_alvo] || []).push(n); });
+  const nomeOrigem = id => (docsPorId[id]||{}).titulo || 'norma alteradora';
+
+  const corpo = [];
+  corpo.push(par(alvo.titulo, { jc:'center', negrito:true, after:240 }));
+  if (alvo.ementa) corpo.push(par(alvo.ementa, { recuo:TW.recuoEmenta, after:240 }));
+  corpo.push(par('Texto compilado — versão consolidada com as alterações posteriores. ' +
+                 'Documento de apoio à consulta, gerado automaticamente e sujeito a conferência.',
+                 { jc:'center', cor:'B8541F', after:240 }));
+
+  let alterados = 0;
+  disps.forEach(d => {
+    const mudancas = porRotulo[d.rotulo_normalizado];
+    const txt = (d.texto||'').trim();
+    if (!mudancas || !mudancas.length) { corpo.push(par(txt, { entrada:true })); return; }
+    alterados++;
+    // original tachado, redação nova em seguida — como no compilado do Planalto
+    corpo.push(par(txt, { entrada:true, tachado:true, cor:'808080', after:40 }));
+    mudancas.forEach(m => {
+      corpo.push(par(`[Nova redação dada por ${nomeOrigem(m.origem_id)}${
+        m.modo === 'parcial' ? ' — alteração parcial: o caput permanece' : ''}]`,
+        { entrada:true, cor:'1E5C4F', after:40 }));
+      m.texto_novo.split('\n').map(l => l.trim()).filter(Boolean)
+        .forEach(l => corpo.push(par(l, { entrada:true, negrito:true, after:40 })));
+    });
+    corpo.push(par('', { after:120 }));
+  });
+  corpo.push(par('Este conteúdo não substitui o publicado na versão certificada.',
+                 { cor:'FF0000', after:0 }));
+
+  const doc =
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+${corpo.join('')}
+<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="${TW.margem}" w:right="${TW.margem}" w:bottom="${TW.margem}" w:left="${TW.margem}" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
+</w:body></w:document>`;
+
+  await baixarDocx(doc, alvo.titulo.replace(/[^\w\sº.-]/g,'').slice(0,70) + ' — compilado.docx');
+  alert(`Compilado gerado: ${alterados} dispositivo(s) com nova redação, de ${disps.length}.`);
+}
+
+async function baixarDocx(documentoXml, nome){
+  if (!window.JSZip) {
+    await new Promise((ok, err) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+      s.onload = ok; s.onerror = () => err(new Error('não carregou o compactador'));
+      document.head.appendChild(s);
+    });
+  }
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml',
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`);
+  zip.folder('_rels').file('.rels',
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+  zip.folder('word').file('document.xml', documentoXml);
+  const blob = await zip.generateAsync({ type:'blob',
+    mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = nome; a.click();
 }
 
 /* ---------- export ---------- */
