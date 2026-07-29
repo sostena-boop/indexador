@@ -991,7 +991,7 @@ async function gerarCompilado(){
   const origens = [...new Set(rels.map(r => r.origem_id))].filter(Boolean);
   const { data: novas } = await sb.from('redacoes_novas').select('*').in('origem_id', origens);
   const { data: disps } = await sb.from('dispositivos')
-    .select('ordem,tipo,rotulo,rotulo_normalizado,texto').eq('documento_id', alvo.id).order('ordem');
+    .select('id,pai_id,ordem,tipo,rotulo,rotulo_normalizado,texto').eq('documento_id', alvo.id).order('ordem');
   if (!disps || !disps.length) { alert('Esta norma ainda não foi segmentada por dispositivo.'); return; }
 
   const porRotulo = {};
@@ -1005,11 +1005,24 @@ async function gerarCompilado(){
                  'Documento de apoio à consulta, gerado automaticamente e sujeito a conferência.',
                  { jc:'center', cor:'B8541F', after:240 }));
 
+  // Substituição INTEGRAL de um artigo alcança os §§ e incisos dele — a redação nova já os
+  // traz dentro do bloco. Sem isto, os antigos apareceriam logo abaixo, sem tacho, como se
+  // ainda valessem.
+  const substituidos = new Set();
+  disps.forEach(d => (porRotulo[d.rotulo_normalizado]||[]).forEach(m => {
+    if (m.modo === 'integral') substituidos.add(d.id);
+  }));
+
   let alterados = 0;
   disps.forEach(d => {
     const mudancas = porRotulo[d.rotulo_normalizado];
     const txt = (d.texto||'').trim();
-    if (!mudancas || !mudancas.length) { corpo.push(par(txt, { entrada:true })); return; }
+    if (!mudancas || !mudancas.length) {
+      corpo.push(substituidos.has(d.pai_id)
+        ? par(txt, { entrada:true, tachado:true, cor:'808080' })
+        : par(txt, { entrada:true }));
+      return;
+    }
     alterados++;
     // original tachado, redação nova em seguida — como no compilado do Planalto
     corpo.push(par(txt, { entrada:true, tachado:true, cor:'808080', after:40 }));
