@@ -179,8 +179,7 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
             <input type="checkbox" id="fTexto" checked onchange="carregarFila()"> só com texto integral
           </label>
           <button class="b sec" onclick="exportarCSV()">Exportar CSV</button>
-          <button class="b sec" onclick="document.getElementById('novaNorma').classList.toggle('hidden')">+ norma fora do Memória SPU</button>
-          <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
+                    <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
         </div>
         <div id="novaNorma" class="hidden" style="border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff">
           <h3 class="blo" style="margin-top:0">Norma que ainda não está no Memória SPU</h3>
@@ -232,6 +231,9 @@ let estagioAtual = 'esp1';
 let rejeitadas = [], propostasNovas = [], buscaPalavra = '';
 let acervo = [], docsPorId = {}, legisManuais = [], buscaLegis = '';
 let ocorrenciaAtual = {};   // por termo, qual ocorrência mostrar no próximo clique
+// Triagem: primeira decisão da análise. null = ainda não respondida.
+// false = norma de outros assuntos (RH, diárias, orçamento, TI) — a ficha não é preenchida.
+let patrimonial = null;
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
 // Nome de órgão não é conteúdo da norma: sem esta máscara, "Patrimônio" e "União" batem
@@ -295,7 +297,7 @@ async function carregarBase(){
   // acervo inteiro em memória, para a busca de legislação relacionada responder instantânea
   const { data: todos } = await sb.from('documentos')
     .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,public_url')
-    .eq('colecao_id', colecaoId).limit(1200);
+    .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).limit(1200);
   acervo = (todos || []).map(d => ({
     id:d.id, titulo:d.titulo, tipo_norma:d.tipo_norma, ano_publicacao:d.ano_publicacao,
     item_id_tainacan:d.item_id_tainacan, public_url:d.public_url,
@@ -306,7 +308,7 @@ async function carregarBase(){
   }));
   acervo.forEach(d => docsPorId[d.id] = d);
 
-  const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort();
+  const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort();  // acervo já vem sem os fora de escopo
   document.getElementById('fTipo').innerHTML = '<option value="">Todos os tipos</option>' +
     uniq.map(t => `<option>${esc(t)}</option>`).join('');
 }
@@ -319,7 +321,8 @@ async function carregarFila(){
   const busca = (document.getElementById('fTitulo').value || '').trim();
   let q = sb.from('documentos')
     .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma', { count:'exact' })
-    .eq('colecao_id', colecaoId).order('ordem_fila', { ascending:true }).limit(120);
+    .eq('colecao_id', colecaoId).eq('fora_de_escopo', false)
+    .order('ordem_fila', { ascending:true }).limit(120);
   // buscando por título, o estágio deixa de filtrar: quem procura uma norma específica
   // quer encontrá-la esteja ela em que fila estiver
   if (!busca) q = q.eq('status', st);
@@ -387,6 +390,9 @@ async function abrir(id){
     (d.fonte === 'ocr' ? ' <span class="pill duv">texto de OCR — conferir números</span>' : '') +
     (d.em_duvida ? ' <span class="pill duv">marcado com dúvida</span>' : '') +
     (nAlt && nDisp ? ` <button class="b" onclick="gerarCompilado()" title="${nAlt} alteração(ões) registrada(s)">gerar texto compilado (.docx)</button>` : '');
+  // a triagem só é perguntada uma vez: se o estágio anterior já decidiu, herda
+  patrimonial = (ant && ant.patrimonial !== null && ant.patrimonial !== undefined)
+    ? ant.patrimonial : null;
   renderDoc();
   renderFicha();
 }
@@ -462,7 +468,12 @@ function renderFicha(){
   const cheioA = selAssuntos.length >= limiteAssuntos();
   const cheioP = selPalavras.length >= limitePalavras();
 
+  // A triagem vem primeiro: não sendo norma patrimonial, não há assunto nem palavra-chave
+  // de patrimônio a atribuir, e insistir só produziria classificação forçada.
+  if (patrimonial !== true) { renderTriagem(); return; }
+
   document.getElementById('ficha').innerHTML = `
+    ${blocoTriagem()}
     <h3 class="blo">Assunto</h3>
     <div class="campo">
       <label>Selecionados — máximo ${limiteAssuntos()}</label>
@@ -590,6 +601,47 @@ function renderFicha(){
       <button class="b sec" onclick="voltar()">cancelar</button>
       <button class="b" onclick="salvar()">salvar e avançar estágio</button>
     </div>`;
+}
+
+/* ---------- triagem: é norma patrimonial? ---------- */
+function ehAdministrativa(){
+  return /administrativ|fora do escopo/i.test(docAtual.macrofuncao || '');
+}
+function renderTriagem(){
+  const rec = patrimonial === false;
+  document.getElementById('ficha').innerHTML = `
+    <h3 class="blo" style="margin-top:0">Esta norma é patrimonial?</h3>
+    <div class="ajuda" style="margin-bottom:12px;font-style:normal">
+      Norma patrimonial é a que trata do <b>patrimônio da União</b> — caracterização, ingresso,
+      avaliação, destinação, uso, receitas, controle. Não são patrimoniais as de recursos humanos,
+      diárias e passagens, orçamento, tecnologia da informação e afins, ainda que editadas pela SPU.
+    </div>
+    ${ehAdministrativa() ? `<div class="aviso">Pela contagem de termos, esta norma foi classificada
+      como <b>${esc(docAtual.macrofuncao)}</b>. É indício de que não seja patrimonial — confira antes de decidir.</div>` : ''}
+    <div class="barra" style="margin-bottom:18px">
+      <button class="b" onclick="responderTriagem(true)">Sim, é patrimonial — seguir para a ficha</button>
+      <button class="b sec" onclick="responderTriagem(false)">Não é patrimonial</button>
+    </div>
+    ${rec ? `
+      <div class="campo"><label>Motivo da recusa</label>
+        <input type="text" id="motivoRec" value="${esc(campos.motivo_recusa||'')}"
+               placeholder="ex.: trata de diárias e passagens"
+               onchange="setCampo('motivo_recusa', this.value)"></div>
+      <div class="aviso">Ao salvar, a norma segue para conferência já marcada como
+        <b>recusada por não ser patrimonial</b>. Assunto e palavras-chave não são preenchidos.</div>
+      <div class="rodape-acoes">
+        <button class="b sec" onclick="voltar()">cancelar</button>
+        <button class="b" onclick="salvar()">salvar recusa e avançar</button>
+      </div>` : ''}`;
+}
+function blocoTriagem(){
+  return `<div class="aviso ok" style="margin-bottom:14px">Classificada como norma patrimonial.
+    <button class="b sec" style="padding:3px 9px;margin-left:8px" onclick="patrimonial=null;renderFicha()">rever</button></div>`;
+}
+function responderTriagem(v){
+  patrimonial = v;
+  if (v) { selPalavras = selPalavras || []; }
+  renderFicha();
 }
 
 let expandidos = new Set();
@@ -823,6 +875,19 @@ function tirarLegis(docId){
 
 /* ---------- salvar ---------- */
 async function salvar(){
+  if (patrimonial === null) { alert('Responda primeiro se a norma é patrimonial.'); return; }
+
+  // recusa na triagem: não há ficha a preencher, o item segue para conferência
+  if (patrimonial === false) {
+    const { error } = await sb.from('etapas_revisao').insert({
+      documento_id: docAtual.id, estagio: estagioAtual, usuario_id: usuario.id,
+      patrimonial: false, motivo_recusa: campos.motivo_recusa || null,
+      termos: [], campos: { recusada:'não é norma patrimonial', motivo: campos.motivo_recusa || null }
+    });
+    if (error) { alert('Erro ao salvar: ' + error.message); return; }
+    voltar(); return;
+  }
+
   if (!selAssuntos.length) { if (!confirm('Nenhum assunto selecionado. Salvar assim mesmo?')) return; }
 
   const confirmadas = relAtual.filter(r => decisoesRel[r.id] === 'confirmada');
@@ -877,7 +942,7 @@ async function salvar(){
 
   const { error } = await sb.from('etapas_revisao').insert({
     documento_id: docAtual.id, estagio: estagioAtual, usuario_id: usuario.id,
-    termos, campos: fichaFinal
+    patrimonial: true, termos, campos: fichaFinal
   });
   if (error) { alert('Erro ao salvar: ' + error.message); return; }
 
