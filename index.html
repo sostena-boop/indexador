@@ -415,8 +415,10 @@ function cabeca(t){
 function renderDoc(){
   const t = docAtual.texto || '(sem texto integral extraído)';
   let html = esc(t);
-  const sugeridas = sugerirPalavras().map(s => s.termo);
-  const todas = [...new Set(selPalavras.concat(sugeridas))]
+  // na triagem, destaca as expressões patrimoniais; depois dela, as palavras-chave
+  const patr = patrimonial === true ? [] : expressoesEncontradas().map(x => x.termo);
+  const sugeridas = patrimonial === true ? sugerirPalavras().map(s => s.termo) : [];
+  const todas = [...new Set(selPalavras.concat(sugeridas, patr))]
                   .sort((a,b) => b.length - a.length);   // termo mais longo primeiro, para não partir o maior
   todas.forEach(p => {
     const escolhida = selPalavras.includes(p);
@@ -609,8 +611,22 @@ function renderFicha(){
 function ehAdministrativa(){
   return /administrativ|fora do escopo/i.test(docAtual.macrofuncao || '');
 }
+/* Indício A FAVOR de ser patrimonial. Sem ele a triagem só tinha o indício contrário
+   (macrofunção Administrativo/Geral), e uma norma que delega competência para alienar
+   imóveis da União poderia ser recusada por parecer administrativa. */
+function expressoesEncontradas(){
+  const lista = config.expressoes_patrimoniais || [];
+  const t = norm(docAtual.texto || '');
+  const cab = norm(cabeca(docAtual.texto || ''));
+  return lista.map(e => {
+    const rx = new RegExp('(^|[^a-z0-9])' + escRx(norm(e)) + '(?![a-z0-9])', 'g');
+    const n = (t.match(rx) || []).length;
+    return { termo: e, n, cabeca: rx.test(cab) };
+  }).filter(x => x.n > 0).sort((a,b) => (b.cabeca - a.cabeca) || (b.n - a.n));
+}
 function renderTriagem(){
   const rec = patrimonial === false;
+  renderDoc();   // reacende o destaque das expressões patrimoniais no texto
   document.getElementById('ficha').innerHTML = `
     <h3 class="blo" style="margin-top:0">Esta norma é patrimonial?</h3>
     <div class="ajuda" style="margin-bottom:12px;font-style:normal">
@@ -620,6 +636,20 @@ function renderTriagem(){
     </div>
     ${ehAdministrativa() ? `<div class="aviso">Pela contagem de termos, esta norma foi classificada
       como <b>${esc(docAtual.macrofuncao)}</b>. É indício de que não seja patrimonial — confira antes de decidir.</div>` : ''}
+    ${(() => {
+      const ex = expressoesEncontradas();
+      if (!ex.length) return '';
+      return `<div class="aviso ok">
+        <b>Indício de matéria patrimonial.</b> O texto usa ${ex.length} expressão${ex.length>1?'ões':''}
+        do vocabulário de patrimônio da União. Clique para ver no texto:<br>
+        ${ex.slice(0,12).map(x => `<button class="b sec" style="padding:2px 9px;margin:5px 5px 0 0;font-weight:${x.cabeca?'700':'500'}"
+            onclick="irParaOcorrencia('${esc(x.termo).replace(/'/g,"\\'")}')"
+            title="${x.cabeca?'aparece na ementa ou no Art. 1º':'aparece no corpo'}">${esc(x.termo)} ×${x.n}${x.cabeca?' ◆':''}</button>`).join('')}
+        ${ex.length>12?`<br><span style="font-size:11.5px">e mais ${ex.length-12}</span>`:''}
+        <div style="font-size:11.5px;margin-top:7px">◆ marca as que aparecem na ementa ou no Art. 1º —
+        peso maior que as do corpo, porque indicam o objeto da norma e não mera citação.</div>
+      </div>`;
+    })()}
     <div class="barra" style="margin-bottom:18px">
       <button class="b" onclick="responderTriagem(true)">Sim, é patrimonial — seguir para a ficha</button>
       <button class="b sec" onclick="responderTriagem(false)">Não é patrimonial</button>
