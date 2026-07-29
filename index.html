@@ -75,6 +75,13 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
 .pill.esp2 { background:#e3ecf6; color:#1c4a7a; }
 .pill.fim { background:#eee; color:#666; }
 .pill.duv { background:var(--mark); color:#6b5600; }
+tr.trecho td { padding:2px 10px 11px 10px; border-bottom:1px solid var(--line);
+  font-size:12.5px; color:var(--muted); line-height:1.6; font-style:italic; }
+tr.trecho b { background:var(--mark); color:var(--ink); font-style:normal; padding:0 2px; border-radius:3px; }
+tr.trecho .onde { display:inline-block; background:var(--ok-bg); color:var(--accent-dark); font-style:normal;
+  font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;
+  padding:1px 7px; border-radius:10px; margin-right:7px; }
+table.fila tr.trecho:hover td { background:transparent; }
 
 .split { display:grid; grid-template-columns: 1fr 1fr; gap:18px; align-items:start; }
 @media (max-width:1100px) { .split { grid-template-columns:1fr; } }
@@ -172,8 +179,8 @@ table.fila a { color:var(--accent-dark); font-weight:600; text-decoration:none; 
             <option value="aguardando_esp2">A conferir — já indexadas por um especialista</option>
             <option value="concluido">Prontas — conferidas pelos dois</option>
           </select>
-          <input type="text" id="fTitulo" placeholder="buscar por título ou número" style="width:250px"
-                 oninput="carregarFila()" autocomplete="off">
+          <input type="text" id="fTitulo" placeholder="buscar no título, número ou texto da norma" style="width:290px"
+                 oninput="buscaAtrasada()" autocomplete="off">
           <select id="fTipo" onchange="carregarFila()"><option value="">Todos os tipos</option></select>
           <label style="font-size:13px;display:flex;gap:6px;align-items:center">
             <input type="checkbox" id="fTexto" checked onchange="carregarFila()"> só com texto integral
@@ -316,23 +323,35 @@ async function carregarBase(){
 }
 
 /* ---------- fila ---------- */
+// busca no texto integral custa mais que filtrar título: espera a digitação parar
+let temporizadorBusca = null;
+function buscaAtrasada(){
+  clearTimeout(temporizadorBusca);
+  temporizadorBusca = setTimeout(carregarFila, 350);
+}
 async function carregarFila(){
   const st = document.getElementById('fEstagio').value;
   const tipo = document.getElementById('fTipo').value;
   const soTexto = document.getElementById('fTexto').checked;
   const busca = (document.getElementById('fTitulo').value || '').trim();
-  let q = sb.from('documentos')
-    .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma', { count:'exact' })
-    .eq('colecao_id', colecaoId).eq('fora_de_escopo', false)
-    .order('ordem_fila', { ascending:true }).limit(120);
-  // buscando por título, o estágio deixa de filtrar: quem procura uma norma específica
-  // quer encontrá-la esteja ela em que fila estiver
-  if (!busca) q = q.eq('status', st);
-  else q = q.or(`titulo.ilike.%${busca}%,numero_norma.ilike.%${busca}%`);
-  if (tipo) q = q.eq('tipo_norma', tipo);
-  if (soTexto) q = q.not('texto','is',null);
-  const { data, count } = await q;
-  const linhas = data || [];
+  let linhas = [], count = 0;
+  if (busca.length >= 3) {
+    // busca por título, número, ementa E texto integral, com trecho do achado.
+    // O estágio deixa de filtrar: quem procura uma norma quer achá-la em qualquer fila.
+    const { data } = await sb.rpc('buscar_normas', { termo: busca, limite: 80 });
+    linhas = (data || []).filter(d => (!tipo || d.tipo_norma === tipo) && (!soTexto || d.tem_texto));
+    count = linhas.length;
+  } else {
+    let q = sb.from('documentos')
+      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma', { count:'exact' })
+      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st)
+      .order('ordem_fila', { ascending:true }).limit(120);
+    if (tipo) q = q.eq('tipo_norma', tipo);
+    if (soTexto) q = q.not('texto','is',null);
+    const r = await q;
+    linhas = (r.data || []).map(d => ({ ...d, tem_texto: !!d.texto }));
+    count = r.count || 0;
+  }
   const est = { aguardando_esp1:['esp1','a indexar'], aguardando_esp2:['esp2','a conferir'],
                 concluido:['fim','pronta'], duplicado_excluir:['fim','duplicada'] };
   document.getElementById('filaInfo').textContent =
@@ -346,8 +365,10 @@ async function carregarFila(){
           ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}</td>
       <td>${esc(d.tipo_norma||'—')}</td><td>${d.ano_publicacao||'—'}</td>
       <td><span class="pill ${e[0]}">${e[1]}</span></td>
-      <td>${d.texto ? (d.texto.length > 400 ? 'integral' : 'curto') : '<span style="color:var(--bad)">sem texto</span>'}</td>
-      <td><button class="b sec" onclick="abrir('${d.id}')">abrir</button></td></tr>`;
+      <td>${d.tem_texto ? 'integral' : '<span style="color:var(--bad)">sem texto</span>'}</td>
+      <td><button class="b sec" onclick="abrir('${d.id}')">abrir</button></td></tr>
+      ${d.trecho ? `<tr class="trecho"><td colspan="6">
+        <span class="onde">${esc(d.onde||'')}</span> ${d.trecho}</td></tr>` : ''}`;
     }).join('')}
     </tbody></table>` : `<div class="vazio">${busca ? 'Nenhuma norma casa com essa busca.' : 'Nada nesta fila.'}</div>`;
 }
