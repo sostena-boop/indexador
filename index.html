@@ -190,6 +190,9 @@ table.fila tr.trecho:hover td { background:transparent; }
           <label style="font-size:13px;display:flex;gap:6px;align-items:center">
             <input type="checkbox" id="fTexto" checked onchange="carregarFila()"> só com texto integral
           </label>
+          <label style="font-size:13px;display:flex;gap:6px;align-items:center" title="normas em que o ano não foi identificado">
+            <input type="checkbox" id="fSemAno" onchange="carregarFila()"> só sem ano
+          </label>
           <button class="b sec" onclick="exportarCSV()">Exportar CSV</button>
                     <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
         </div>
@@ -340,7 +343,9 @@ async function carregarFila(){
   const soTexto = document.getElementById('fTexto').checked;
   const busca = (document.getElementById('fTitulo').value || '').trim();
   const ordem = document.getElementById('fOrdem').value;
-  // norma sem ano vai para o fim em qualquer sentido: não é "antiga", é desconhecida
+  const semAno = document.getElementById('fSemAno').checked;
+  // Fora do filtro, a norma sem ano fica no fim: ausência de ano não é "muito antiga",
+  // é desconhecida. Para trabalhar nesse grupo existe o filtro próprio.
   const porAno = (a, b) => {
     const x = a.ano_publicacao, y = b.ano_publicacao;
     if (!x && !y) return 0;
@@ -354,7 +359,8 @@ async function carregarFila(){
     // busca por título, número, ementa E texto integral, com trecho do achado.
     // O estágio deixa de filtrar: quem procura uma norma quer achá-la em qualquer fila.
     const { data } = await sb.rpc('buscar_normas', { termo: busca, limite: 80 });
-    linhas = (data || []).filter(d => (!tipo || d.tipo_norma === tipo) && (!soTexto || d.tem_texto));
+    linhas = (data || []).filter(d => (!tipo || d.tipo_norma === tipo) && (!soTexto || d.tem_texto)
+                                   && (!semAno || !d.ano_publicacao));
     // na busca, "ordem da fila" quer dizer manter o ranqueamento por relevância
     if (ordem !== 'fila') linhas.sort(porAno);
     count = linhas.length;
@@ -367,6 +373,7 @@ async function carregarFila(){
                .order('titulo', { ascending: true });
     if (tipo) q = q.eq('tipo_norma', tipo);
     if (soTexto) q = q.not('texto','is',null);
+    if (semAno) q = q.is('ano_publicacao', null);
     const r = await q;
     linhas = (r.data || []).map(d => ({ ...d, tem_texto: !!d.texto }));
     count = r.count || 0;
