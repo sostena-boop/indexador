@@ -182,6 +182,11 @@ table.fila tr.trecho:hover td { background:transparent; }
           <input type="text" id="fTitulo" placeholder="buscar no título, número ou texto da norma" style="width:290px"
                  oninput="buscaAtrasada()" autocomplete="off">
           <select id="fTipo" onchange="carregarFila()"><option value="">Todos os tipos</option></select>
+          <select id="fOrdem" onchange="carregarFila()">
+            <option value="recente">Ano — mais recentes primeiro</option>
+            <option value="antiga">Ano — mais antigas primeiro</option>
+            <option value="fila">Ordem da fila</option>
+          </select>
           <label style="font-size:13px;display:flex;gap:6px;align-items:center">
             <input type="checkbox" id="fTexto" checked onchange="carregarFila()"> só com texto integral
           </label>
@@ -334,18 +339,32 @@ async function carregarFila(){
   const tipo = document.getElementById('fTipo').value;
   const soTexto = document.getElementById('fTexto').checked;
   const busca = (document.getElementById('fTitulo').value || '').trim();
+  const ordem = document.getElementById('fOrdem').value;
+  // norma sem ano vai para o fim em qualquer sentido: não é "antiga", é desconhecida
+  const porAno = (a, b) => {
+    const x = a.ano_publicacao, y = b.ano_publicacao;
+    if (!x && !y) return 0;
+    if (!x) return 1;
+    if (!y) return -1;
+    return ordem === 'antiga' ? x - y : y - x;
+  };
+
   let linhas = [], count = 0;
   if (busca.length >= 3) {
     // busca por título, número, ementa E texto integral, com trecho do achado.
     // O estágio deixa de filtrar: quem procura uma norma quer achá-la em qualquer fila.
     const { data } = await sb.rpc('buscar_normas', { termo: busca, limite: 80 });
     linhas = (data || []).filter(d => (!tipo || d.tipo_norma === tipo) && (!soTexto || d.tem_texto));
+    // na busca, "ordem da fila" quer dizer manter o ranqueamento por relevância
+    if (ordem !== 'fila') linhas.sort(porAno);
     count = linhas.length;
   } else {
     let q = sb.from('documentos')
       .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma', { count:'exact' })
-      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st)
-      .order('ordem_fila', { ascending:true }).limit(120);
+      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st).limit(120);
+    if (ordem === 'fila') q = q.order('ordem_fila', { ascending: true });
+    else q = q.order('ano_publicacao', { ascending: ordem === 'antiga', nullsFirst: false })
+               .order('titulo', { ascending: true });
     if (tipo) q = q.eq('tipo_norma', tipo);
     if (soTexto) q = q.not('texto','is',null);
     const r = await q;
