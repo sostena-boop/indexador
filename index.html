@@ -255,6 +255,10 @@ let ocorrenciaAtual = {};   // por termo, qual ocorrência mostrar no próximo c
 // Triagem: primeira decisão da análise. null = ainda não respondida.
 // false = norma de outros assuntos (RH, diárias, orçamento, TI) — a ficha não é preenchida.
 let patrimonial = null;
+// preenchido quando a norma aberta já está reservada por outra pessoa (aviso, não bloqueio)
+let travaDeOutro = null;
+// retrato da ficha logo depois de carregada, para distinguir "trabalhou" de "só olhou"
+let baseFicha = null;
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
 const ESTAGIO = { cogec:'COGEC', esp1:'Especialista 1', esp2:'Especialista 2' };
@@ -268,6 +272,35 @@ function dataCurta(iso){
 function creditos(etapas){
   return (etapas||[]).slice().sort((a,b) => a.criado_em < b.criado_em ? -1 : 1)
     .map(e => `${nomeDe(e.usuario_id)} (${ESTAGIO[e.estagio] || e.estagio})`);
+}
+
+/* ---------- trava de fila ----------
+   Enquanto alguém está com a norma, ela some da fila dos outros — é o que evita duas
+   pessoas indexarem o mesmo item num mutirão.
+
+   A trava TEM QUE EXPIRAR. Uma versão anterior implementou a reserva sem expiração e
+   deixou 19 normas travadas entre 16 e 28 de julho, presas a quem abriu e nunca voltou.
+   Prazo em `colecoes.config.horas_trava`, para ajustar sem republicar. */
+function horasTrava(){ return Number(config.horas_trava) || 4; }
+function corteTrava(){ return new Date(Date.now() - horasTrava()*3600e3).toISOString(); }
+// visível para mim = livre, ou expirada, ou minha
+function filtroTrava(){
+  return `em_andamento_por.is.null,em_andamento_desde.lt.${corteTrava()},em_andamento_por.eq.${usuario.id}`;
+}
+function travaViva(d){
+  return d.em_andamento_por && d.em_andamento_desde && d.em_andamento_desde > corteTrava();
+}
+function horaCurta(iso){
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+// Solta a trava, e só a MINHA: o `.eq(em_andamento_por, eu)` impede que abrir uma norma
+// travada por outro e voltar tire a reserva dessa pessoa.
+async function soltarTrava(id){
+  if (!id) return;
+  await sb.from('documentos')
+    .update({ em_andamento_por: null, em_andamento_desde: null })
+    .eq('id', id).eq('em_andamento_por', usuario.id);
 }
 // Nome de órgão não é conteúdo da norma: sem esta máscara, "Patrimônio" e "União" batem
 // em praticamente todo documento por causa do cabeçalho institucional.
@@ -386,8 +419,10 @@ async function carregarFila(){
     count = linhas.length;
   } else {
     let q = sb.from('documentos')
-      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma', { count:'exact' })
-      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st).limit(120);
+      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma,em_andamento_por,em_andamento_desde', { count:'exact' })
+      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st)
+      .or(filtroTrava())   // some da fila de quem não pegou; reaparece quando a reserva expira
+      .limit(120);
     if (ordem === 'fila') q = q.order('ordem_fila', { ascending: true });
     else q = q.order('ano_publicacao', { ascending: ordem === 'antiga', nullsFirst: false })
                .order('titulo', { ascending: true });
@@ -420,7 +455,9 @@ async function carregarFila(){
       const quem = creditos(etapasPorDoc[d.id]);
       return `<tr>
       <td><a onclick="abrir('${d.id}')">${esc(d.titulo)}</a>
-          ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}</td>
+          ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}
+          ${travaViva(d) ? '<span class="pill esp1" title="reservada por você ao abrir; expira em '
+            + horasTrava() + 'h">com você desde ' + horaCurta(d.em_andamento_desde) + '</span>' : ''}</td>
       <td>${esc(d.tipo_norma||'—')}</td><td>${d.ano_publicacao||'—'}</td>
       <td><span class="pill ${e[0]}">${e[1]}</span></td>
       <td>${d.tem_texto ? 'integral' : '<span style="color:var(--bad)">sem texto</span>'}</td>
@@ -434,8 +471,19 @@ async function carregarFila(){
 
 /* ---------- documento ---------- */
 async function abrir(id){
+  // Reivindicação ATÔMICA: o `.or()` vai junto do update, então quem chegar primeiro leva.
+  // Ler-e-depois-gravar deixaria a janela em que dois clientes leem "livre" e ambos gravam.
+  // `select('id')` devolve as linhas afetadas: vazio = a norma é de outra pessoa.
+  const { data: pego } = await sb.from('documentos')
+    .update({ em_andamento_por: usuario.id, em_andamento_desde: new Date().toISOString() })
+    .eq('id', id).or(filtroTrava()).select('id');
+  const eraDeOutro = !(pego && pego.length);
+
   const { data: d } = await sb.from('documentos').select('*').eq('id', id).single();
   docAtual = d;
+  // Não bloqueia a leitura: sem autenticação de verdade, impedir seria pior que avisar —
+  // e a pessoa pode legitimamente precisar consultar a norma que o colega está indexando.
+  travaDeOutro = eraDeOutro && travaViva(d) && d.em_andamento_por !== usuario.id ? d : null;
   estagioAtual = d.status === 'aguardando_esp2' ? 'esp2' : 'esp1';
   selAssuntos = []; selPalavras = []; decisoesRel = {}; campos = {};
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
@@ -476,20 +524,54 @@ async function abrir(id){
   const linkMemoria = d.public_url
     ? ` <a class="b sec" href="${esc(d.public_url)}" target="_blank" rel="noopener"
            title="abre a ficha desta norma no Memória SPU">abrir no Memória SPU</a>` : '';
+  const avisoTrava = travaDeOutro
+    ? ` <span class="pill duv" title="A reserva expira sozinha em ${horasTrava()}h">` +
+      `${esc(nomeDe(travaDeOutro.em_andamento_por))} está com esta norma desde ` +
+      `${horaCurta(travaDeOutro.em_andamento_desde)} — evite trabalhar em paralelo</span>` : '';
   document.getElementById('docAcoes').innerHTML =
     `<span class="pill ${estagioAtual}">Você aqui: ${{esp1:'Especialista 1',esp2:'Especialista 2'}[estagioAtual]}</span>` +
     (credito ? ' ' + credito : '') +
+    avisoTrava +
     (d.fonte === 'ocr' ? ' <span class="pill duv">texto de OCR — conferir números</span>' : '') +
     (d.em_duvida ? ' <span class="pill duv">marcado com dúvida</span>' : '') +
     linkMemoria +
+    (travaDeOutro ? '' : ` <button class="b sec" onclick="devolverAFila()" title="tira a sua reserva e devolve a norma à fila dos outros">devolver à fila</button>`) +
     (nAlt && nDisp ? ` <button class="b" onclick="gerarCompilado()" title="${nAlt} alteração(ões) registrada(s)">gerar texto compilado (.docx)</button>` : '');
   // a triagem só é perguntada uma vez: se o estágio anterior já decidiu, herda
   patrimonial = (ant && ant.patrimonial !== null && ant.patrimonial !== undefined)
     ? ant.patrimonial : null;
   renderDoc();
   renderFicha();
+  baseFicha = instantaneoFicha();   // tudo que vier depois disto é trabalho da pessoa
 }
-function voltar(){
+// Quem só passou os olhos não deve sair reservando. Foi assim que 19 normas ficaram
+// travadas em julho: a reserva era criada ao abrir e nada a desfazia. Se a ficha não foi
+// tocada, a trava é solta na saída; se houve trabalho, ela fica de pé (e expira sozinha).
+//
+// Comparar contra o estado INICIAL, não contra vazio: `abrir()` já traz `situacao_norma`
+// do banco e a ficha da etapa anterior, então medir "tem conteúdo" dava tocada=true em
+// toda norma que já tivesse qualquer dado — e nada era liberado ao voltar.
+function instantaneoFicha(){
+  return JSON.stringify([patrimonial, selAssuntos, selPalavras, decisoesRel, campos,
+                         legisManuais, propostasNovas, rejeitadas]);
+}
+function fichaTocada(){ return baseFicha !== null && instantaneoFicha() !== baseFicha; }
+async function voltar(){
+  const id = docAtual && docAtual.id;
+  const manter = fichaTocada();
+  docAtual = null; travaDeOutro = null; baseFicha = null;
+  document.getElementById('telaDoc').classList.add('hidden');
+  document.getElementById('telaFila').classList.remove('hidden');
+  if (id && !manter) await soltarTrava(id);
+  carregarFila();
+}
+async function devolverAFila(){
+  const id = docAtual && docAtual.id;
+  if (!id) return;
+  if (fichaTocada() && !confirm('Você já preencheu parte da ficha. Devolver assim mesmo? '
+      + 'O que não foi salvo se perde.')) return;
+  await soltarTrava(id);
+  docAtual = null; travaDeOutro = null; baseFicha = null;
   document.getElementById('telaDoc').classList.add('hidden');
   document.getElementById('telaFila').classList.remove('hidden');
   carregarFila();
@@ -1018,6 +1100,7 @@ async function salvar(){
       termos: [], campos: { recusada:'não é norma patrimonial', motivo: campos.motivo_recusa || null }
     });
     if (error) { alert('Erro ao salvar: ' + error.message); return; }
+    await soltarTrava(docAtual.id);   // gravou: a reserva não tem mais razão de existir
     voltar(); return;
   }
 
@@ -1094,6 +1177,7 @@ async function salvar(){
       descricao: 'Proposto durante a indexação de "' + docAtual.titulo + '". Não consta do vocabulário.'
     });
   }
+  await soltarTrava(docAtual.id);     // gravou: a reserva não tem mais razão de existir
   voltar();
 }
 
