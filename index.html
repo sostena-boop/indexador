@@ -56,11 +56,14 @@ h3.blo:first-child { margin-top:0; }
 select, input[type=text], input[type=date], textarea { padding:9px 11px; border:1px solid var(--line); border-radius:9px;
   font-family:inherit; font-size:13.5px; background:#fff; color:var(--ink); }
 textarea { width:100%; resize:vertical; }
-button.b { padding:9px 15px; border:none; border-radius:9px; background:var(--accent); color:#fff; font-weight:600;
+/* `a.b` junto de `button.b`: o link para o Memória SPU precisa continuar sendo <a> —
+   abre em aba nova e deixa copiar o endereço — mas com aparência de botão. */
+button.b, a.b { padding:9px 15px; border:none; border-radius:9px; background:var(--accent); color:#fff; font-weight:600;
   font-size:13.5px; cursor:pointer; font-family:inherit; }
-button.b:hover { background:var(--accent-dark); }
-button.b.sec { background:#fff; color:var(--accent-dark); border:1px solid var(--line); }
-button.b.sec:hover { background:var(--ok-bg); }
+a.b { display:inline-block; text-decoration:none; line-height:1.2; vertical-align:middle; }
+button.b:hover, a.b:hover { background:var(--accent-dark); color:#fff; }
+button.b.sec, a.b.sec { background:#fff; color:var(--accent-dark); border:1px solid var(--line); }
+button.b.sec:hover, a.b.sec:hover { background:var(--ok-bg); color:var(--accent-dark); }
 button.b:disabled { opacity:.45; cursor:not-allowed; }
 
 table.fila { width:100%; border-collapse:collapse; font-size:13.5px; }
@@ -245,12 +248,27 @@ let estagioAtual = 'esp1';
 // taxa de aceite de 10% em julho. Guardar só os aceitos jogaria fora o sinal de calibração.
 let rejeitadas = [], propostasNovas = [], buscaPalavra = '';
 let acervo = [], docsPorId = {}, legisManuais = [], buscaLegis = '';
+// id -> nome de quem revisou. A etapa grava usuario_id; sem este mapa a tela só sabia
+// dizer o ESTÁGIO ("Especialista 1"), que é o papel, não a pessoa.
+let perfisPorId = {};
 let ocorrenciaAtual = {};   // por termo, qual ocorrência mostrar no próximo clique
 // Triagem: primeira decisão da análise. null = ainda não respondida.
 // false = norma de outros assuntos (RH, diárias, orçamento, TI) — a ficha não é preenchida.
 let patrimonial = null;
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
+const ESTAGIO = { cogec:'COGEC', esp1:'Especialista 1', esp2:'Especialista 2' };
+function nomeDe(uid){ return perfisPorId[uid] || 'autor não identificado'; }
+function dataCurta(iso){
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit' });
+}
+// "Coimbra (Especialista 1)" — quem fez, em que papel. Ordenado por data, mais antigo antes,
+// que é a ordem em que a norma passou pelas mãos das pessoas.
+function creditos(etapas){
+  return (etapas||[]).slice().sort((a,b) => a.criado_em < b.criado_em ? -1 : 1)
+    .map(e => `${nomeDe(e.usuario_id)} (${ESTAGIO[e.estagio] || e.estagio})`);
+}
 // Nome de órgão não é conteúdo da norma: sem esta máscara, "Patrimônio" e "União" batem
 // em praticamente todo documento por causa do cabeçalho institucional.
 const MASCARA = /(secretaria do patrim[oô]nio da uni[aã]o|minist[eé]rio da gest[aã]o e (da )?inova[cç][aã]o em servi[cç]os p[uú]blicos|minist[eé]rio da economia|minist[eé]rio do planejamento[^,.;]*|presid[eê]ncia da rep[uú]blica|di[aá]rio oficial da uni[aã]o|advocacia-geral da uni[aã]o|controladoria-geral da uni[aã]o)/gi;
@@ -262,6 +280,7 @@ function escRx(s){ return (s||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 /* ---------- entrada ---------- */
 async function iniciar(){
   const { data: perfis } = await sb.from('perfis').select('id,nome_exibicao').order('nome_exibicao');
+  (perfis||[]).forEach(p => perfisPorId[p.id] = p.nome_exibicao);
   document.getElementById('perfis').innerHTML = (perfis||[]).map(p =>
     `<button class="perfil-btn" onclick="entrar('${p.id}','${esc(p.nome_exibicao)}')">${esc(p.nome_exibicao)}</button>`).join('');
   const salvo = localStorage.getItem('indexador_perfil');
@@ -272,6 +291,7 @@ async function criarPerfil(){
   if (!nome) return;
   const { data, error } = await sb.from('perfis').insert({ nome_exibicao: nome }).select().single();
   if (error) { document.getElementById('gateMsg').textContent = 'Erro: ' + error.message; return; }
+  perfisPorId[data.id] = data.nome_exibicao;   // senão o recém-criado aparece como não identificado
   entrar(data.id, data.nome_exibicao);
 }
 async function entrar(id, nome){
@@ -378,22 +398,35 @@ async function carregarFila(){
     linhas = (r.data || []).map(d => ({ ...d, tem_texto: !!d.texto }));
     count = r.count || 0;
   }
+  // Quem já passou por cada norma da página — uma consulta só, pelos ids exibidos.
+  // Fica fora da consulta da fila de propósito: a fila vem de `buscar_normas` na busca e
+  // de `documentos` fora dela, e duplicar o join nos dois caminhos sairia mais caro.
+  const etapasPorDoc = {};
+  if (linhas.length) {
+    const { data: eps } = await sb.from('etapas_revisao')
+      .select('documento_id,estagio,usuario_id,criado_em')
+      .in('documento_id', linhas.map(d => d.id));
+    (eps||[]).forEach(e => (etapasPorDoc[e.documento_id] = etapasPorDoc[e.documento_id] || []).push(e));
+  }
+
   const est = { aguardando_esp1:['esp1','a indexar'], aguardando_esp2:['esp2','a conferir'],
                 concluido:['fim','pronta'], duplicado_excluir:['fim','duplicada'] };
   document.getElementById('filaInfo').textContent =
     (busca ? `${linhas.length} encontrados` : `${linhas.length} exibidos`) + ` de ${count||0}`;
   document.getElementById('filaBox').innerHTML = linhas.length ? `
-    <table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Situação</th><th>Texto</th><th></th></tr></thead><tbody>
+    <table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Situação</th><th>Texto</th><th>Quem revisou</th><th></th></tr></thead><tbody>
     ${linhas.map(d => {
       const e = est[d.status] || ['fim', d.status];
+      const quem = creditos(etapasPorDoc[d.id]);
       return `<tr>
       <td><a onclick="abrir('${d.id}')">${esc(d.titulo)}</a>
           ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}</td>
       <td>${esc(d.tipo_norma||'—')}</td><td>${d.ano_publicacao||'—'}</td>
       <td><span class="pill ${e[0]}">${e[1]}</span></td>
       <td>${d.tem_texto ? 'integral' : '<span style="color:var(--bad)">sem texto</span>'}</td>
+      <td>${quem.length ? esc(quem.join(' · ')) : '<span style="color:var(--muted)">—</span>'}</td>
       <td><button class="b sec" onclick="abrir('${d.id}')">abrir</button></td></tr>
-      ${d.trecho ? `<tr class="trecho"><td colspan="6">
+      ${d.trecho ? `<tr class="trecho"><td colspan="7">
         <span class="onde">${esc(d.onde||'')}</span> ${d.trecho}</td></tr>` : ''}`;
     }).join('')}
     </tbody></table>` : `<div class="vazio">${busca ? 'Nenhuma norma casa com essa busca.' : 'Nada nesta fila.'}</div>`;
@@ -434,10 +467,21 @@ async function abrir(id){
     .in('tipo', ['altera','revoga_parcialmente']);
   const { count: nDisp } = await sb.from('dispositivos')
     .select('id', { count:'exact', head:true }).eq('documento_id', id);
+  // quem já passou por esta norma, com data — o estágio diz o papel, isto diz a pessoa
+  const jaFizeram = (ants || []).slice().sort((a,b) => a.criado_em < b.criado_em ? -1 : 1);
+  const credito = jaFizeram.map(e =>
+    `<span class="pill ${e.estagio}">${esc(ESTAGIO[e.estagio] || e.estagio)}: ` +
+    `${esc(nomeDe(e.usuario_id))} · ${dataCurta(e.criado_em)}</span>`).join(' ');
+  // 9 das 656 normas não têm public_url; nessas o botão não aparece, em vez de levar a lugar nenhum
+  const linkMemoria = d.public_url
+    ? ` <a class="b sec" href="${esc(d.public_url)}" target="_blank" rel="noopener"
+           title="abre a ficha desta norma no Memória SPU">abrir no Memória SPU</a>` : '';
   document.getElementById('docAcoes').innerHTML =
-    `<span class="pill ${estagioAtual}">${{esp1:'Especialista 1',esp2:'Especialista 2'}[estagioAtual]}</span>` +
+    `<span class="pill ${estagioAtual}">Você aqui: ${{esp1:'Especialista 1',esp2:'Especialista 2'}[estagioAtual]}</span>` +
+    (credito ? ' ' + credito : '') +
     (d.fonte === 'ocr' ? ' <span class="pill duv">texto de OCR — conferir números</span>' : '') +
     (d.em_duvida ? ' <span class="pill duv">marcado com dúvida</span>' : '') +
+    linkMemoria +
     (nAlt && nDisp ? ` <button class="b" onclick="gerarCompilado()" title="${nAlt} alteração(ões) registrada(s)">gerar texto compilado (.docx)</button>` : '');
   // a triagem só é perguntada uma vez: se o estágio anterior já decidiu, herda
   patrimonial = (ant && ant.patrimonial !== null && ant.patrimonial !== undefined)
