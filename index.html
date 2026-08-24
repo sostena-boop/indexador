@@ -274,6 +274,8 @@ let baseFicha = null;
 let propostas = {};
 let orgaos = [];            // vocabulário de órgãos observado na coleção
 let linhaPlanilha = null;   // campos que existem na planilha e não em `documentos`
+let duplicadas = {};        // documento_id -> outras normas com mesmo tipo, número e data
+let naoPublicados = {};     // item_id do Tainacan -> 'draft' | 'private'
 
 // Os campos cadastrais que a equipe de indexação pode propor correção (decisão de 21/08).
 // `public_url`, arquivos e os special_* ficam de fora: não são editáveis.
@@ -396,17 +398,36 @@ async function carregarBase(){
 
   // acervo inteiro em memória, para a busca de legislação relacionada responder instantânea
   const { data: todos } = await sb.from('documentos')
-    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,public_url')
+    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,public_url,numero_norma,data_publicacao')
     .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).limit(1200);
   acervo = (todos || []).map(d => ({
     id:d.id, titulo:d.titulo, tipo_norma:d.tipo_norma, ano_publicacao:d.ano_publicacao,
     item_id_tainacan:d.item_id_tainacan, public_url:d.public_url,
+    numero_norma:d.numero_norma, data_publicacao:d.data_publicacao,
     // registros problemáticos do acervo: atalho .url cadastrado como se fosse a norma,
     // e itens sem nenhum arquivo. Aparecem na busca, mas por último e sinalizados —
     // relacionar a norma errada gera link para documento vazio no Tainacan.
     suspeito: /\.url$/i.test(d.titulo||'') || d.diagnostico_extracao === 'sem_documento_fonte'
   }));
   acervo.forEach(d => docsPorId[d.id] = d);
+
+  // Índice de possível duplicata: tipo + número + data. Com o ANO no lugar da data o
+  // sinal triplica (54 grupos, 124 normas) e vira ruído; com a data são 19 grupos e 39
+  // normas, 5,9% da coleção — a pessoa consegue olhar cada um.
+  duplicadas = {};
+  const porChave = {};
+  acervo.forEach(d => {
+    const k = chaveNorma(d);
+    if (k) (porChave[k] = porChave[k] || []).push(d);
+  });
+  Object.values(porChave).filter(g => g.length > 1)
+    .forEach(g => g.forEach(d => duplicadas[d.id] = g.filter(x => x.id !== d.id)));
+
+  // Registros que o Tainacan não publica — rascunho ou privado. Só esses vêm; são poucos.
+  const { data: naoPub } = await sb.from('tainacan_sync')
+    .select('item_id,special_item_status').neq('special_item_status', 'publish');
+  naoPublicados = {};
+  (naoPub || []).forEach(r => naoPublicados[r.item_id] = r.special_item_status);
 
   // vocabulário de órgãos observado na própria coleção. A lista canônica é a aba
   // `Nomes_Unidades` da planilha, que ainda não está no banco — até lá, esta serve, e o
@@ -584,6 +605,7 @@ async function abrir(id){
     avisoTrava +
     (d.fonte === 'ocr' ? ' <span class="pill duv">texto de OCR — conferir números</span>' : '') +
     (d.em_duvida ? ' <span class="pill duv">marcado com dúvida</span>' : '') +
+    (avisosTopo() ? ' ' + avisosTopo() : '') +
     linkMemoria +
     (travaDeOutro ? '' : ` <button class="b sec" onclick="devolverAFila()" title="tira a sua reserva e devolve a norma à fila dos outros">devolver à fila</button>`) +
     (nAlt && nDisp ? ` <button class="b" onclick="gerarCompilado()" title="${nAlt} alteração(ões) registrada(s)">gerar texto compilado (.docx)</button>` : '');
@@ -687,6 +709,76 @@ function sugerirPalavras(){
 function limiteAssuntos(){ return config.limite_assuntos || 3; }
 function limitePalavras(){ return config.limite_palavras_chave || 6; }
 
+/* ---------- avisos automáticos ----------
+   A ferramenta já sabe coisas que quem revisa não tem como ver. Cada aviso aparece junto
+   do campo a que se refere, com a evidência ao lado — nunca como tarefa separada. */
+
+function chaveNorma(d){
+  const num = String(d.numero_norma || '').replace(/\D/g, '').replace(/^0+/, '');
+  const data = (d.data_publicacao || '').trim() || (d.ano_publicacao ? String(d.ano_publicacao) : '');
+  if (!d.tipo_norma || !num || !data) return null;
+  return d.tipo_norma.trim().toLowerCase() + '|' + num + '|' + data;
+}
+
+// Revogações que apontam PARA esta norma. Direção importa: o que interessa aqui é o que
+// aconteceu com ela, não o que ela fez com as outras.
+function revogacoesApontando(){
+  return (relAtual || []).filter(r => r.destino_id === docAtual.id && /^revoga/.test(r.tipo));
+}
+
+/* O grafo não preenche a Situação da Norma — ele a CONTESTA. O campo é obrigatório e
+   nunca fica vazio; o problema relatado pela equipe é a desatualização, norma que consta
+   vigente e já foi revogada. São 61 normas na coleção nessa condição.
+   "Vigente com alteração" + revogação PARCIAL é coerente e não deve avisar. */
+function avisoSituacao(){
+  const s = campos.situacao_norma || '';
+  if (!/^vigente/i.test(s)) return '';
+  const revs = revogacoesApontando();
+  const totais = revs.filter(r => r.tipo === 'revoga');
+  const parciais = revs.filter(r => r.tipo === 'revoga_parcialmente');
+  const contradiz = totais.length || (parciais.length && /sem\s+altera/i.test(s));
+  if (!contradiz) return '';
+  const quais = (totais.length ? totais : parciais).slice(0, 3).map(r => {
+    const o = r.origem || {};
+    const ev = (r.evidencia || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    return `<div style="margin-top:5px"><b>${esc(o.titulo || 'norma não resolvida')}</b>
+      ${r.tipo === 'revoga' ? 'revoga esta norma' : 'revoga parte desta norma'}
+      ${ev ? `<div class="ajuda" style="margin:2px 0 0">“${esc(ev)}…”</div>` : ''}</div>`;
+  }).join('');
+  return `<div class="aviso">
+    <b>A situação declarada contradiz o que o grafo encontrou.</b>
+    Consta <b>${esc(s)}</b>, e há ${totais.length ? 'revogação total' : 'revogação parcial'}
+    apontando para ela. Confira antes de seguir — a relação ainda não foi confirmada por ninguém.
+    ${quais}</div>`;
+}
+
+/* Título com cara de nome de arquivo, ou em caixa alta. São defeitos que a auditoria
+   cataloga e que quem indexa pode propor a correção na hora, com a norma aberta ao lado. */
+function avisoTitulo(){
+  const t = (docAtual.titulo || '').trim();
+  const p = [];
+  if (/\.(pdf|docx?|odt|url|txt)\s*$/i.test(t)) p.push('termina com extensão de arquivo');
+  if (/^\s*\w+\s+\d{4}\s*-\s*\d/.test(t)) p.push('parece nome de arquivo de pasta (“Tipo ano - número-ano”)');
+  if (t === t.toUpperCase() && /[A-ZÁÉÍÓÚÂÊÔÃÕÇ]{4}/.test(t)) p.push('está inteiro em caixa alta');
+  if (!p.length) return '';
+  return `<div class="aviso" style="margin-bottom:10px">
+    <b>O título ${p.join(' e ')}.</b> O padrão da auditoria é
+    <i>Tipo [sigla] nº número, de dia de mês de ano</i>. Se for o caso, proponha a correção abaixo.</div>`;
+}
+
+// Avisos que valem para a norma inteira, e por isso ficam no topo junto dos outros
+function avisosTopo(){
+  const out = [];
+  const st = naoPublicados[docAtual.item_id_tainacan];
+  if (st) out.push(`<span class="pill duv" title="não aparece na coleção pública">
+    ${st === 'draft' ? 'rascunho no Tainacan' : 'item privado no Tainacan'} — não publicado</span>`);
+  const dup = duplicadas[docAtual.id] || [];
+  if (dup.length) out.push(`<span class="pill duv"
+    title="${esc(dup.map(d => d.titulo).join(' · '))}">possível duplicata:
+    ${dup.length} outro registro com mesmo tipo, número e data</span>`);
+  return out.join(' ');
+}
+
 /* ---------- cadastro: correção como proposta ----------
    O valor do lote NUNCA sai da vista. Se o campo virasse uma caixa de texto comum, quem
    usa entenderia que está corrigindo o registro — e a distinção entre proposta e fato
@@ -762,6 +854,7 @@ function blocoCadastro(){
       <b>não altera o registro</b>: sai como proposta na devolutiva do lote, para eles validarem.
       ${n ? `<b>${n} correção(ões) proposta(s) nesta norma.</b>` : ''}
     </div>
+    ${avisoTitulo()}
     ${extras.length ? `<div class="aviso"><b>Esta norma tem ${extras.length + 2} órgãos emissores</b>,
       e a carga comporta dois. Além dos dois abaixo consta: ${esc(extras.join(' · '))}.
       A regra da auditoria manda deixar para revisão humana — não corrija por aqui, aponte na devolutiva.</div>` : ''}
@@ -868,8 +961,9 @@ function renderFicha(){
     </div>
 
     <h3 class="blo">Situação e vigência</h3>
+    ${avisoSituacao()}
     <div class="campo"><label>Situação da norma</label>
-      <select onchange="setCampo('situacao_norma',this.value)">
+      <select onchange="setSituacao(this.value)">
         <option value="">—</option>
         ${SITUACOES.map(s => `<option ${campos.situacao_norma===s?'selected':''}>${s}</option>`).join('')}
       </select></div>
@@ -1104,6 +1198,9 @@ function tirarProposta(t){
 }
 function tirarPalavra(t){ selPalavras = selPalavras.filter(x => x !== t); renderFicha(); renderDoc(); }
 function setCampo(k,v){ campos[k] = v; }
+// A situação da norma é o único campo cuja mudança altera outro trecho da tela: o aviso
+// de contradição com o grafo. Por isso re-renderiza — é <select>, então não há foco a perder.
+function setSituacao(v){ campos.situacao_norma = v; renderFicha(); }
 async function setDuvida(v){
   docAtual.em_duvida = v;
   await sb.from('documentos').update({ em_duvida:v, duvida_por: usuario.id, duvida_em: new Date().toISOString() })
