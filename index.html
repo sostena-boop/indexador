@@ -72,7 +72,6 @@ button.b.mini, a.b.mini { padding:4px 10px; font-size:12px; border-radius:7px; }
 .campo.cadastro .valor-atual { padding:6px 0 4px; font-size:14px; line-height:1.45; word-break:break-word; }
 .campo.cadastro .valor-atual.riscado { color:var(--muted); text-decoration:line-through; text-decoration-thickness:1px; }
 .campo.cadastro.proposto { border-left:3px solid var(--terra); padding-left:10px; background:#fdf6ef; border-radius:0 8px 8px 0; }
-.campo.cadastro.proposto input.motivo { margin-top:5px; font-size:13px; }
 .campo.cadastro.proposto > button { margin-top:6px; }
 
 /* Campos de sistema: recolhidos, cinzentos, sem cara de campo editável. */
@@ -215,7 +214,8 @@ table.fila tr.trecho:hover td { background:transparent; }
           <label style="font-size:13px;display:flex;gap:6px;align-items:center" title="normas em que o ano não foi identificado">
             <input type="checkbox" id="fSemAno" onchange="carregarFila()"> só sem ano
           </label>
-          <button class="b sec" onclick="exportarCSV()">Exportar CSV</button>
+          <button class="b sec" onclick="exportarExcel()"
+                  title="planilha para a equipe do repositório — a preparação do CSV de carga é feita por eles">Exportar Excel</button>
                     <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
         </div>
         <div id="novaNorma" class="hidden" style="border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff">
@@ -278,7 +278,7 @@ let patrimonial = null;
 let travaDeOutro = null;
 // retrato da ficha logo depois de carregada, para distinguir "trabalhou" de "só olhou"
 let baseFicha = null;
-// Correções cadastrais propostas nesta ficha: campo -> {valor_proposto, motivo}.
+// Correções cadastrais propostas nesta ficha: campo -> {valor}.
 // NÃO alteram o registro — saem na devolutiva do lote. Decisão de 21/08/2026: o canal
 // único de saída é a devolutiva, e quem certifica o cadastro é a equipe do repositório.
 let propostas = {};
@@ -365,7 +365,7 @@ async function soltarTrava(id){
 // em praticamente todo documento por causa do cabeçalho institucional.
 const MASCARA = /(secretaria do patrim[oô]nio da uni[aã]o|minist[eé]rio da gest[aã]o e (da )?inova[cç][aã]o em servi[cç]os p[uú]blicos|minist[eé]rio da economia|minist[eé]rio do planejamento[^,.;]*|presid[eê]ncia da rep[uú]blica|di[aá]rio oficial da uni[aã]o|advocacia-geral da uni[aã]o|controladoria-geral da uni[aã]o)/gi;
 
-function norm(s){ return (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+function norm(s){ return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function escRx(s){ return (s||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 
@@ -594,8 +594,8 @@ async function abrir(id){
   }
   // propostas já registradas para esta norma, valendo a mais recente de cada campo
   const { data: prop } = await sb.from('v_propostas_cadastro_vigentes')
-    .select('campo,valor_proposto,motivo').eq('documento_id', id);
-  (prop || []).forEach(p => propostas[p.campo] = { valor: p.valor_proposto, motivo: p.motivo || '' });
+    .select('campo,valor_proposto').eq('documento_id', id);
+  (prop || []).forEach(p => propostas[p.campo] = { valor: p.valor_proposto });
 
   // ficha já registrada em estágio anterior serve de ponto de partida
   const { data: ants } = await sb.from('etapas_revisao').select('*').eq('documento_id', id);
@@ -868,7 +868,8 @@ function avisosTopo(){
    O valor do lote NUNCA sai da vista. Se o campo virasse uma caixa de texto comum, quem
    usa entenderia que está corrigindo o registro — e a distinção entre proposta e fato
    morreria na primeira semana. Por isso o original fica à mostra, esmaecido, e a proposta
-   aparece abaixo, marcada, com o motivo capturado no momento em que a pessoa sabe qual é. */
+   aparece abaixo, marcada. A devolutiva leva o valor anterior e o proposto; a justificativa
+   textual foi retirada em 24/08 — a comparação dos dois valores já diz o que mudou. */
 
 function valorAtual(k){
   const d = docAtual || {};
@@ -923,9 +924,6 @@ function blocoCadastro(){
       <label>${c.r}</label>
       <div class="valor-atual riscado">${atual ? esc(atual) : vazio}</div>
       ${entrada}
-      <input type="text" class="motivo" value="${esc(p.motivo)}"
-             placeholder="motivo da correção — vai na devolutiva"
-             onchange="setMotivoProposta('${c.k}',this.value)">
       <button class="b sec mini" onclick="desfazerProposta('${c.k}')">desfazer</button>
     </div>`;
   }).join('');
@@ -950,11 +948,10 @@ function blocoCadastro(){
 }
 
 function proporCorrecao(k){
-  propostas[k] = { valor: valorAtual(k), motivo: '' };
+  propostas[k] = { valor: valorAtual(k) };
   renderFicha();
 }
 function setProposta(k, v){ if (propostas[k]) { propostas[k].valor = v; } }
-function setMotivoProposta(k, v){ if (propostas[k]) { propostas[k].motivo = v; } }
 function desfazerProposta(k){ delete propostas[k]; renderFicha(); }
 
 // proposta que não muda nada não é proposta — não vai para a devolutiva
@@ -962,7 +959,7 @@ function propostasEfetivas(){
   return Object.entries(propostas)
     .filter(([k, p]) => (p.valor || '').trim() !== valorAtual(k).trim())
     .map(([k, p]) => ({ campo: k, valor_atual: valorAtual(k) || null,
-                        valor_proposto: (p.valor || '').trim(), motivo: (p.motivo || '').trim() || null }));
+                        valor_proposto: (p.valor || '').trim() }));
 }
 
 function renderFicha(){
@@ -1694,15 +1691,18 @@ ${corpo.join('')}
   alert(`Compilado gerado: ${alterados} dispositivo(s) com nova redação, de ${disps.length}.`);
 }
 
+async function carregarCompactador(){
+  if (window.JSZip) return;
+  await new Promise((ok, err) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    s.onload = ok; s.onerror = () => err(new Error('não carregou o compactador'));
+    document.head.appendChild(s);
+  });
+}
+
 async function baixarDocx(documentoXml, nome){
-  if (!window.JSZip) {
-    await new Promise((ok, err) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-      s.onload = ok; s.onerror = () => err(new Error('não carregou o compactador'));
-      document.head.appendChild(s);
-    });
-  }
+  await carregarCompactador();
   const zip = new JSZip();
   zip.file('[Content_Types].xml',
 `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1723,7 +1723,122 @@ async function baixarDocx(documentoXml, nome){
   a.href = URL.createObjectURL(blob); a.download = nome; a.click();
 }
 
-/* ---------- export ---------- */
+/* ---------- export ----------
+   Decisão de 24/08/2026: o Indexador entrega uma PLANILHA EXCEL. A equipe do repositório
+   faz os tratamentos e produz o CSV de carga do Tainacan — a ferramenta não assume os
+   parâmetros técnicos daquele formato.
+
+   Duas abas, porque são duas naturezas: o que a equipe jurídica INDEXOU, e o que ela
+   PROPÔS corrigir no cadastro. Misturar as duas na mesma aba faria a proposta parecer
+   valor confirmado, que é justamente a distinção que se quer preservar. */
+
+function celXml(ref, v){
+  const s = (v === null || v === undefined) ? '' : String(v);
+  if (!s) return `<c r="${ref}"/>`;
+  // sempre texto: número de norma e data não podem virar valor numérico ou data do Excel,
+  // senão 11.327 vira decimal e 05/05/2026 vira serial dependente de locale
+  const esc = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+               .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc}</t></is></c>`;
+}
+function colLetra(n){
+  let s = '';
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - r - 1) / 26; }
+  return s;
+}
+function abaXml(linhas){
+  const corpo = linhas.map((linha, i) => '<row r="' + (i + 1) + '">' +
+    linha.map((v, j) => celXml(colLetra(j + 1) + (i + 1), v)).join('') + '</row>').join('');
+  const largura = (linhas[0] || []).map((_, j) =>
+    `<col min="${j+1}" max="${j+1}" width="${j===0?12:32}" customWidth="1"/>`).join('');
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    (largura ? '<cols>' + largura + '</cols>' : '') +
+    '<sheetData>' + corpo + '</sheetData></worksheet>';
+}
+
+async function baixarXlsx(abas, nome){
+  await carregarCompactador();
+  const zip = new JSZip();
+  const nomes = abas.map(a => a.nome);
+  zip.file('[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+    abas.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') +
+    '</Types>');
+  zip.file('_rels/.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+    '</Relationships>');
+  zip.file('xl/workbook.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+    nomes.map((n, i) => `<sheet name="${esc(n)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('') +
+    '</sheets></workbook>');
+  zip.file('xl/_rels/workbook.xml.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    abas.map((_, i) => `<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('') +
+    '</Relationships>');
+  abas.forEach((a, i) => zip.file(`xl/worksheets/sheet${i+1}.xml`, abaXml(a.linhas)));
+
+  const blob = await zip.generateAsync({ type:'blob',
+    mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = nome; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+async function exportarExcel(){
+  const { data: etapas } = await sb.from('etapas_revisao')
+    .select('documento_id,estagio,campos,termos,criado_em,usuario_id').limit(2000);
+  const { data: docs } = await sb.from('documentos')
+    .select('id,item_id_tainacan,titulo,lote').eq('colecao_id', colecaoId).limit(1000);
+  const { data: props } = await sb.from('v_propostas_cadastro_vigentes')
+    .select('documento_id,campo,valor_atual,valor_proposto,usuario_id,criado_em');
+
+  const porDoc = {};
+  (etapas||[]).forEach(e => {
+    const a = porDoc[e.documento_id];
+    if (!a || a.criado_em < e.criado_em) porDoc[e.documento_id] = e;
+  });
+  const porId = {}; (docs||[]).forEach(d => porId[d.id] = d);
+
+  const colsIdx = ['special_item_id','Lote','Título','Assunto','assunto_taxonomia_2','assunto_taxonomia_3',
+    'regime_destinacao','regime_aquisicao','Palavra-chave','Situação da Norma','data_inicio_vigencia',
+    'Ato de Revogação','Revogado em','Norma de regulamentação','Ato de alteração','Legislação Relacionada',
+    'Não é norma patrimonial','Motivo da recusa','Revisado por','Revisado em'];
+  const idx = [colsIdx];
+  (docs||[]).forEach(d => {
+    const e = porDoc[d.id]; if (!e) return;
+    const c = e.campos || {}, cam = c.assuntos_caminho || [];
+    const pcs = (e.termos||[]).filter(t => t.decisao !== 'rejeitado').map(t => t.termo).join('||');
+    idx.push([ d.item_id_tainacan||'', d.lote||'', d.titulo||'',
+      cam[0]||'', cam[1]||'', cam[2]||'', c.regime_destinacao||'', c.regime_aquisicao||'', pcs,
+      c.situacao_norma||'', c.data_inicio_vigencia||'', c.ato_revogacao||'', c.revogado_em||'',
+      c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'',
+      e.patrimonial === false ? 'sim' : '', c.motivo_recusa||'',
+      nomeDe(e.usuario_id), dataCurta(e.criado_em) ]);
+  });
+
+  const corr = [['special_item_id','Título','Campo','Valor atual','Valor proposto','Proposto por','Proposto em']];
+  (props||[]).forEach(p => {
+    const d = porId[p.documento_id]; if (!d) return;
+    corr.push([ d.item_id_tainacan||'', d.titulo||'', p.campo,
+      p.valor_atual||'', p.valor_proposto||'', nomeDe(p.usuario_id), dataCurta(p.criado_em) ]);
+  });
+
+  if (idx.length === 1 && corr.length === 1) { alert('Nada indexado ainda para exportar.'); return; }
+  await baixarXlsx([{ nome:'Indexação', linhas: idx },
+                    { nome:'Correções propostas', linhas: corr }],
+                   'indexacao_memoria_spu.xlsx');
+}
+
 async function exportarCSV(){
   const { data: etapas } = await sb.from('etapas_revisao')
     .select('documento_id,estagio,campos,termos,criado_em').limit(2000);
