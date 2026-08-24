@@ -324,6 +324,22 @@ function creditos(etapas){
    A trava TEM QUE EXPIRAR. Uma versão anterior implementou a reserva sem expiração e
    deixou 19 normas travadas entre 16 e 28 de julho, presas a quem abriu e nunca voltou.
    Prazo em `colecoes.config.horas_trava`, para ajustar sem republicar. */
+/* ---------- controle por lote ----------
+   O trabalho é entregue em lotes pela equipe do repositório, e quem indexa só deve ver o
+   que foi liberado. A lista fica em `colecoes.config.lotes_liberados`, para liberar o
+   lote seguinte sem republicar a página.
+   Lista VAZIA = sem restrição, que é o estado antes de os lotes começarem. Assim o
+   mecanismo pode ir ao ar sem mudar nada para quem já está trabalhando. */
+function lotesLiberados(){
+  const v = config.lotes_liberados;
+  return Array.isArray(v) ? v.map(String).filter(s => s !== '') : [];
+}
+function haGateDeLote(){ return lotesLiberados().length > 0; }
+function loteLiberado(d){
+  if (!haGateDeLote()) return true;
+  return lotesLiberados().includes(String(d && d.lote || ''));
+}
+
 function horasTrava(){ return Number(config.horas_trava) || 4; }
 function corteTrava(){ return new Date(Date.now() - horasTrava()*3600e3).toISOString(); }
 // visível para mim = livre, ou expirada, ou minha
@@ -409,12 +425,12 @@ async function carregarBase(){
 
   // acervo inteiro em memória, para a busca de legislação relacionada responder instantânea
   const { data: todos } = await sb.from('documentos')
-    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,public_url,numero_norma,data_publicacao')
+    .select('id,titulo,tipo_norma,ano_publicacao,item_id_tainacan,diagnostico_extracao,public_url,numero_norma,data_publicacao,lote')
     .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).limit(1200);
   acervo = (todos || []).map(d => ({
     id:d.id, titulo:d.titulo, tipo_norma:d.tipo_norma, ano_publicacao:d.ano_publicacao,
     item_id_tainacan:d.item_id_tainacan, public_url:d.public_url,
-    numero_norma:d.numero_norma, data_publicacao:d.data_publicacao,
+    numero_norma:d.numero_norma, data_publicacao:d.data_publicacao, lote:d.lote,
     // registros problemáticos do acervo: atalho .url cadastrado como se fosse a norma,
     // e itens sem nenhum arquivo. Aparecem na busca, mas por último e sinalizados —
     // relacionar a norma errada gera link para documento vazio no Tainacan.
@@ -489,10 +505,12 @@ async function carregarFila(){
     count = linhas.length;
   } else {
     let q = sb.from('documentos')
-      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma,em_andamento_por,em_andamento_desde', { count:'exact' })
+      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma,em_andamento_por,em_andamento_desde,lote', { count:'exact' })
       .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st)
       .or(filtroTrava())   // some da fila de quem não pegou; reaparece quando a reserva expira
       .limit(120);
+    // a fila mostra só o lote liberado; a busca por texto continua alcançando tudo
+    if (haGateDeLote()) q = q.in('lote', lotesLiberados());
     if (ordem === 'fila') q = q.order('ordem_fila', { ascending: true });
     else q = q.order('ano_publicacao', { ascending: ordem === 'antiga', nullsFirst: false })
                .order('titulo', { ascending: true });
@@ -516,8 +534,12 @@ async function carregarFila(){
 
   const est = { aguardando_esp1:['esp1','a indexar'], aguardando_esp2:['esp2','a conferir'],
                 concluido:['fim','pronta'], duplicado_excluir:['fim','duplicada'] };
-  document.getElementById('filaInfo').textContent =
-    (busca ? `${linhas.length} encontrados` : `${linhas.length} exibidos`) + ` de ${count||0}`;
+  document.getElementById('filaInfo').innerHTML =
+    esc((busca ? `${linhas.length} encontrados` : `${linhas.length} exibidos`) + ` de ${count||0}`) +
+    (haGateDeLote()
+      ? ` · <b>lote ${esc(lotesLiberados().join(', '))}</b>` +
+        (busca ? ' <span class="cnt">a busca alcança toda a coleção</span>' : '')
+      : '');
   document.getElementById('filaBox').innerHTML = linhas.length ? `
     <table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Situação</th><th>Texto</th><th>Quem revisou</th><th></th></tr></thead><tbody>
     ${linhas.map(d => {
@@ -835,6 +857,10 @@ function avisosTopo(){
   if (dup.length) out.push(`<span class="pill duv"
     title="${esc(dup.map(d => d.titulo).join(' · '))}">possível duplicata:
     ${dup.length} outro registro com mesmo tipo, número e data</span>`);
+  // norma alcançada pela busca, mas fora do lote em trabalho: consultar pode, indexar não
+  if (!loteLiberado(docAtual)) out.push(`<span class="pill duv"
+    title="liberados: ${esc(lotesLiberados().join(', '))}">fora do lote em trabalho
+    ${docAtual.lote ? '— é do lote ' + esc(docAtual.lote) : '— sem lote'} · consulta apenas</span>`);
   return out.join(' ');
 }
 
@@ -846,7 +872,10 @@ function avisosTopo(){
 
 function valorAtual(k){
   const d = docAtual || {};
-  if (k === 'data_assinatura') return (linhaPlanilha && linhaPlanilha.data_assinatura) || '';
+  // data_assinatura passou a existir em `documentos` (22/08); planilha_sync fica de reserva
+  // para o que ainda não foi retropreenchido
+  if (k === 'data_assinatura')
+    return d.data_assinatura || (linhaPlanilha && linhaPlanilha.data_assinatura) || '';
   if (k === 'orgao_edicao_1' || k === 'orgao_edicao_2') {
     const partes = (d.orgao_edicao || '').split('||').map(s => s.trim());
     return (k === 'orgao_edicao_1' ? partes[0] : partes[1]) || '';
@@ -1413,6 +1442,15 @@ async function gravarPropostas(){
 }
 
 async function salvar(){
+  // A inibição de verdade é aqui, não na fila: a busca alcança a coleção inteira de
+  // propósito, e sem esta guarda daria para indexar norma de lote ainda não liberado.
+  if (!loteLiberado(docAtual)) {
+    alert('Esta norma está fora do lote em trabalho' +
+      (docAtual.lote ? ' (é do lote ' + docAtual.lote + ')' : ' (sem lote atribuído)') +
+      '.\n\nEm trabalho agora: lote ' + lotesLiberados().join(', ') +
+      '.\n\nDá para consultar, não para indexar.');
+    return;
+  }
   if (patrimonial === null) { alert('Responda primeiro se a norma é patrimonial.'); return; }
 
   // recusa na triagem: não há ficha a preencher, o item segue para conferência
