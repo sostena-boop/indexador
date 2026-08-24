@@ -75,6 +75,16 @@ button.b.mini, a.b.mini { padding:4px 10px; font-size:12px; border-radius:7px; }
 .campo.cadastro.proposto input.motivo { margin-top:5px; font-size:13px; }
 .campo.cadastro.proposto > button { margin-top:6px; }
 
+/* Campos de sistema: recolhidos, cinzentos, sem cara de campo editável. */
+details.sistema { margin-top:18px; border:1px solid var(--line); border-radius:10px; background:#fbfaf6; padding:10px 12px; }
+details.sistema > summary { cursor:pointer; font-size:12.5px; font-weight:600; color:var(--muted); }
+details.sistema[open] > summary { margin-bottom:4px; }
+.sis { display:flex; gap:10px; padding:3px 0; font-size:12.5px; border-top:1px solid var(--line); }
+.sis:first-of-type { border-top:none; }
+.sis-r { flex:0 0 130px; color:var(--muted); }
+.sis-v { flex:1; word-break:break-all; color:var(--ink); }
+.sis-v.falta { color:var(--warn); font-style:italic; }
+
 table.fila { width:100%; border-collapse:collapse; font-size:13.5px; }
 table.fila th { text-align:left; padding:9px 10px; border-bottom:2px solid var(--line); color:var(--muted);
   font-size:11.5px; text-transform:uppercase; letter-spacing:.5px; }
@@ -274,6 +284,7 @@ let baseFicha = null;
 let propostas = {};
 let orgaos = [];            // vocabulário de órgãos observado na coleção
 let linhaPlanilha = null;   // campos que existem na planilha e não em `documentos`
+let linhaTainacan = null;   // os poucos campos de sistema que o Indexador guarda
 let duplicadas = {};        // documento_id -> outras normas com mesmo tipo, número e data
 let naoPublicados = {};     // item_id do Tainacan -> 'draft' | 'private'
 
@@ -554,6 +565,10 @@ async function abrir(id){
     const { data: ps } = await sb.from('planilha_sync')
       .select('data_assinatura').eq('item_id', d.item_id_tainacan).limit(1);
     linhaPlanilha = (ps && ps[0]) || null;
+    const { data: ts } = await sb.from('tainacan_sync')
+      .select('special_document,special_item_status,modification_date,public_url')
+      .eq('item_id', d.item_id_tainacan).limit(1);
+    linhaTainacan = (ts && ts[0]) || null;
   }
   // propostas já registradas para esta norma, valendo a mais recente de cada campo
   const { data: prop } = await sb.from('v_propostas_cadastro_vigentes')
@@ -708,6 +723,50 @@ function sugerirPalavras(){
 /* ---------- ficha ---------- */
 function limiteAssuntos(){ return config.limite_assuntos || 3; }
 function limitePalavras(){ return config.limite_palavras_chave || 6; }
+
+/* ---------- campos de sistema do Tainacan ----------
+   Ninguém edita, mas a carga precisa devolvê-los IDÊNTICOS: se vierem vazios, a
+   reimportação corrompe o item. O bloco existe para conferência — e, hoje, sobretudo
+   para tornar visível uma lacuna: o Indexador guarda 3 dos 10. Os outros 7 só existem
+   no XLSX do lote, e um CSV gerado só daqui sairia com eles em branco.
+   (O `AGENTS.md` dizia que estavam em `planilha_sync.sistema_tainacan`; esse campo é
+   `{}` vazio nas 646 linhas.) */
+const CAMPOS_SISTEMA = [
+  { k: 'special_document',       r: 'Documento' },
+  { k: 'special_item_status',    r: 'Situação do item' },
+  { k: 'modification_date',      r: 'Última modificação' },
+  { k: 'special_thumbnail',      r: 'Miniatura' },
+  { k: 'special_attachments',    r: 'Anexos' },
+  { k: 'special_comment_status', r: 'Comentários' },
+  { k: 'special_item_author',    r: 'Autoria do item' },
+  { k: 'special_item_slug',      r: 'Slug' },
+  { k: 'creation_date',          r: 'Criação' },
+  { k: 'user_last_modified',     r: 'Modificado por' },
+];
+
+function blocoSistema(){
+  const t = linhaTainacan || {};
+  const linhas = CAMPOS_SISTEMA.map(c => {
+    const v = t[c.k];
+    const temNoBanco = Object.prototype.hasOwnProperty.call(t, c.k);
+    return `<div class="sis">
+      <span class="sis-r">${c.r}</span>
+      ${temNoBanco
+        ? `<span class="sis-v">${v ? esc(String(v).slice(0, 110)) : '<i>vazio</i>'}</span>`
+        : '<span class="sis-v falta">não guardado no Indexador — vem do lote no export</span>'}
+    </div>`;
+  }).join('');
+  const guardados = CAMPOS_SISTEMA.filter(c => Object.prototype.hasOwnProperty.call(t, c.k)).length;
+  return `<details class="sistema">
+    <summary>Campos de sistema do Tainacan — ${guardados} de ${CAMPOS_SISTEMA.length} guardados aqui</summary>
+    <div class="ajuda" style="margin:8px 0 10px">
+      Não são editáveis. A carga precisa devolvê-los <b>idênticos</b>: se vierem vazios, a
+      reimportação corrompe o item. Hoje o Indexador guarda ${guardados}; os demais só existem
+      na planilha do lote e precisam sair de lá no momento do export.
+    </div>
+    ${linhas}
+  </details>`;
+}
 
 /* ---------- avisos automáticos ----------
    A ferramenta já sabe coisas que quem revisa não tem como ver. Cada aviso aparece junto
@@ -1015,6 +1074,8 @@ function renderFicha(){
       Tenho dúvida neste item</label>
       <div class="ajuda">Equivale à linha amarela da planilha: distingue "não preenchi por dúvida" de "ainda não chegou a vez".</div>
     </div>
+
+    ${blocoSistema()}
 
     <div class="rodape-acoes">
       <button class="b sec" onclick="voltar()">cancelar</button>
