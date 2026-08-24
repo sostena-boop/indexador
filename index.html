@@ -65,6 +65,15 @@ button.b:hover, a.b:hover { background:var(--accent-dark); color:#fff; }
 button.b.sec, a.b.sec { background:#fff; color:var(--accent-dark); border:1px solid var(--line); }
 button.b.sec:hover, a.b.sec:hover { background:var(--ok-bg); color:var(--accent-dark); }
 button.b:disabled { opacity:.45; cursor:not-allowed; }
+button.b.mini, a.b.mini { padding:4px 10px; font-size:12px; border-radius:7px; }
+
+/* Cadastro: o valor que veio no lote fica sempre à vista. Quando há proposta, ele
+   aparece riscado acima dela — quem revisa precisa ver que está propondo, não editando. */
+.campo.cadastro .valor-atual { padding:6px 0 4px; font-size:14px; line-height:1.45; word-break:break-word; }
+.campo.cadastro .valor-atual.riscado { color:var(--muted); text-decoration:line-through; text-decoration-thickness:1px; }
+.campo.cadastro.proposto { border-left:3px solid var(--terra); padding-left:10px; background:#fdf6ef; border-radius:0 8px 8px 0; }
+.campo.cadastro.proposto input.motivo { margin-top:5px; font-size:13px; }
+.campo.cadastro.proposto > button { margin-top:6px; }
 
 table.fila { width:100%; border-collapse:collapse; font-size:13.5px; }
 table.fila th { text-align:left; padding:9px 10px; border-bottom:2px solid var(--line); color:var(--muted);
@@ -259,6 +268,27 @@ let patrimonial = null;
 let travaDeOutro = null;
 // retrato da ficha logo depois de carregada, para distinguir "trabalhou" de "só olhou"
 let baseFicha = null;
+// Correções cadastrais propostas nesta ficha: campo -> {valor_proposto, motivo}.
+// NÃO alteram o registro — saem na devolutiva do lote. Decisão de 21/08/2026: o canal
+// único de saída é a devolutiva, e quem certifica o cadastro é a equipe do repositório.
+let propostas = {};
+let orgaos = [];            // vocabulário de órgãos observado na coleção
+let linhaPlanilha = null;   // campos que existem na planilha e não em `documentos`
+
+// Os campos cadastrais que a equipe de indexação pode propor correção (decisão de 21/08).
+// `public_url`, arquivos e os special_* ficam de fora: não são editáveis.
+const CAMPOS_CADASTRO = [
+  { k: 'titulo',          r: 'Título' },
+  { k: 'tipo_norma',      r: 'Tipo de norma',      lista: 'tipos' },
+  { k: 'numero_norma',    r: 'Número da norma' },
+  { k: 'ementa',          r: 'Resumo / ementa',    area: true },
+  { k: 'link_acesso',     r: 'Link de acesso' },
+  { k: 'data_assinatura', r: 'Data de assinatura', dica: 'dd/mm/aaaa' },
+  { k: 'data_publicacao', r: 'Data de publicação', dica: 'dd/mm/aaaa' },
+  { k: 'ano_publicacao',  r: 'Ano de publicação' },
+  { k: 'orgao_edicao_1',  r: 'Órgão de edição 1',  lista: 'orgaos' },
+  { k: 'orgao_edicao_2',  r: 'Órgão de edição 2',  lista: 'orgaos', soConjunta: true },
+];
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
 const ESTAGIO = { cogec:'COGEC', esp1:'Especialista 1', esp2:'Especialista 2' };
@@ -378,6 +408,14 @@ async function carregarBase(){
   }));
   acervo.forEach(d => docsPorId[d.id] = d);
 
+  // vocabulário de órgãos observado na própria coleção. A lista canônica é a aba
+  // `Nomes_Unidades` da planilha, que ainda não está no banco — até lá, esta serve, e o
+  // campo aceita texto livre porque de todo modo é proposta, não gravação.
+  const { data: orgs } = await sb.from('documentos').select('orgao_edicao')
+    .eq('colecao_id', colecaoId).not('orgao_edicao', 'is', null);
+  orgaos = [...new Set((orgs || []).flatMap(o => (o.orgao_edicao || '').split('||'))
+    .map(s => s.trim()).filter(s => s && s !== '[Sem informação]'))].sort();
+
   const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort();  // acervo já vem sem os fora de escopo
   document.getElementById('fTipo').innerHTML = '<option value="">Todos os tipos</option>' +
     uniq.map(t => `<option>${esc(t)}</option>`).join('');
@@ -488,6 +526,18 @@ async function abrir(id){
   selAssuntos = []; selPalavras = []; decisoesRel = {}; campos = {};
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
   legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
+  propostas = {}; linhaPlanilha = null;
+
+  // data_assinatura ainda não existe em `documentos` — o valor atual vem da planilha
+  if (d.item_id_tainacan) {
+    const { data: ps } = await sb.from('planilha_sync')
+      .select('data_assinatura').eq('item_id', d.item_id_tainacan).limit(1);
+    linhaPlanilha = (ps && ps[0]) || null;
+  }
+  // propostas já registradas para esta norma, valendo a mais recente de cada campo
+  const { data: prop } = await sb.from('v_propostas_cadastro_vigentes')
+    .select('campo,valor_proposto,motivo').eq('documento_id', id);
+  (prop || []).forEach(p => propostas[p.campo] = { valor: p.valor_proposto, motivo: p.motivo || '' });
 
   // ficha já registrada em estágio anterior serve de ponto de partida
   const { data: ants } = await sb.from('etapas_revisao').select('*').eq('documento_id', id);
@@ -553,7 +603,7 @@ async function abrir(id){
 // toda norma que já tivesse qualquer dado — e nada era liberado ao voltar.
 function instantaneoFicha(){
   return JSON.stringify([patrimonial, selAssuntos, selPalavras, decisoesRel, campos,
-                         legisManuais, propostasNovas, rejeitadas]);
+                         legisManuais, propostasNovas, rejeitadas, propostas]);
 }
 function fichaTocada(){ return baseFicha !== null && instantaneoFicha() !== baseFicha; }
 async function voltar(){
@@ -637,6 +687,103 @@ function sugerirPalavras(){
 function limiteAssuntos(){ return config.limite_assuntos || 3; }
 function limitePalavras(){ return config.limite_palavras_chave || 6; }
 
+/* ---------- cadastro: correção como proposta ----------
+   O valor do lote NUNCA sai da vista. Se o campo virasse uma caixa de texto comum, quem
+   usa entenderia que está corrigindo o registro — e a distinção entre proposta e fato
+   morreria na primeira semana. Por isso o original fica à mostra, esmaecido, e a proposta
+   aparece abaixo, marcada, com o motivo capturado no momento em que a pessoa sabe qual é. */
+
+function valorAtual(k){
+  const d = docAtual || {};
+  if (k === 'data_assinatura') return (linhaPlanilha && linhaPlanilha.data_assinatura) || '';
+  if (k === 'orgao_edicao_1' || k === 'orgao_edicao_2') {
+    const partes = (d.orgao_edicao || '').split('||').map(s => s.trim());
+    return (k === 'orgao_edicao_1' ? partes[0] : partes[1]) || '';
+  }
+  return d[k] == null ? '' : String(d[k]);
+}
+
+// o segundo órgão só existe em ato de mais de um emissor
+function ehConjunta(){
+  return /conjunta|interministerial/i.test((docAtual && docAtual.tipo_norma) || '')
+      || !!valorAtual('orgao_edicao_2');
+}
+
+function blocoCadastro(){
+  const linhas = CAMPOS_CADASTRO.filter(c => !c.soConjunta || ehConjunta()).map(c => {
+    const atual = valorAtual(c.k);
+    const p = propostas[c.k];
+    const vazio = '<span class="vazio">— vazio</span>';
+
+    if (!p) {
+      return `<div class="campo cadastro">
+        <label>${c.r}</label>
+        <div class="valor-atual">${atual ? esc(atual) : vazio}</div>
+        <button class="b sec mini" onclick="proporCorrecao('${c.k}')">propor correção</button>
+      </div>`;
+    }
+
+    let entrada;
+    if (c.area) {
+      entrada = `<textarea rows="3" onchange="setProposta('${c.k}',this.value)"
+                   placeholder="valor proposto">${esc(p.valor)}</textarea>`;
+    } else if (c.lista) {
+      const opcoes = (c.lista === 'tipos'
+        ? [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort()
+        : orgaos);
+      entrada = `<input type="text" list="lista_${c.k}" value="${esc(p.valor)}"
+                   onchange="setProposta('${c.k}',this.value)" placeholder="valor proposto">
+                 <datalist id="lista_${c.k}">${opcoes.map(o => `<option value="${esc(o)}">`).join('')}</datalist>`;
+    } else {
+      entrada = `<input type="text" value="${esc(p.valor)}" placeholder="${esc(c.dica || 'valor proposto')}"
+                   onchange="setProposta('${c.k}',this.value)">`;
+    }
+
+    return `<div class="campo cadastro proposto">
+      <label>${c.r}</label>
+      <div class="valor-atual riscado">${atual ? esc(atual) : vazio}</div>
+      ${entrada}
+      <input type="text" class="motivo" value="${esc(p.motivo)}"
+             placeholder="motivo da correção — vai na devolutiva"
+             onchange="setMotivoProposta('${c.k}',this.value)">
+      <button class="b sec mini" onclick="desfazerProposta('${c.k}')">desfazer</button>
+    </div>`;
+  }).join('');
+
+  const n = Object.keys(propostas).length;
+  // A tela só comporta dois órgãos, que é o limite da regra de carga. Havendo um terceiro,
+  // avisar em vez de truncar em silêncio — a Portaria Conjunta MGI/MF/CGU nº 33 tem três.
+  const extras = (valorAtual('orgao_edicao_1') || valorAtual('orgao_edicao_2'))
+    ? ((docAtual.orgao_edicao || '').split('||').map(s => s.trim()).filter(Boolean).slice(2))
+    : [];
+  return `<h3 class="blo" style="margin-top:0">Cadastro</h3>
+    <div class="ajuda" style="margin-bottom:10px">
+      Estes campos são de certificação da equipe do repositório. O que você corrigir aqui
+      <b>não altera o registro</b>: sai como proposta na devolutiva do lote, para eles validarem.
+      ${n ? `<b>${n} correção(ões) proposta(s) nesta norma.</b>` : ''}
+    </div>
+    ${extras.length ? `<div class="aviso"><b>Esta norma tem ${extras.length + 2} órgãos emissores</b>,
+      e a carga comporta dois. Além dos dois abaixo consta: ${esc(extras.join(' · '))}.
+      A regra da auditoria manda deixar para revisão humana — não corrija por aqui, aponte na devolutiva.</div>` : ''}
+    ${linhas}`;
+}
+
+function proporCorrecao(k){
+  propostas[k] = { valor: valorAtual(k), motivo: '' };
+  renderFicha();
+}
+function setProposta(k, v){ if (propostas[k]) { propostas[k].valor = v; } }
+function setMotivoProposta(k, v){ if (propostas[k]) { propostas[k].motivo = v; } }
+function desfazerProposta(k){ delete propostas[k]; renderFicha(); }
+
+// proposta que não muda nada não é proposta — não vai para a devolutiva
+function propostasEfetivas(){
+  return Object.entries(propostas)
+    .filter(([k, p]) => (p.valor || '').trim() !== valorAtual(k).trim())
+    .map(([k, p]) => ({ campo: k, valor_atual: valorAtual(k) || null,
+                        valor_proposto: (p.valor || '').trim(), motivo: (p.motivo || '').trim() || null }));
+}
+
 function renderFicha(){
   const sug = sugerirPalavras();
   // lista aberta de propósito: tipo novo no banco não pode sumir da tela por esquecimento
@@ -651,6 +798,7 @@ function renderFicha(){
 
   document.getElementById('ficha').innerHTML = `
     ${blocoTriagem()}
+    ${blocoCadastro()}
     <h3 class="blo">Assunto</h3>
     <div class="campo">
       <label>Selecionados — máximo ${limiteAssuntos()}</label>
@@ -834,6 +982,10 @@ function renderTriagem(){
                onchange="setCampo('motivo_recusa', this.value)"></div>
       <div class="aviso">Ao salvar, a norma segue para conferência já marcada como
         <b>recusada por não ser patrimonial</b>. Assunto e palavras-chave não são preenchidos.</div>
+      <!-- O cadastro aparece mesmo na norma recusada: título errado é erro de registro
+           independentemente de a norma entrar ou não na coleção, e a devolutiva é o mesmo
+           canal nos dois casos. Assunto e palavra-chave é que não fazem sentido aqui. -->
+      ${blocoCadastro()}
       <div class="rodape-acoes">
         <button class="b sec" onclick="voltar()">cancelar</button>
         <button class="b" onclick="salvar()">salvar recusa e avançar</button>
@@ -1089,6 +1241,19 @@ function tirarLegis(docId){
 }
 
 /* ---------- salvar ---------- */
+
+// As propostas de correção cadastral vão junto de qualquer gravação, inclusive quando a
+// norma é recusada na triagem: erro de título continua sendo erro mesmo em norma que não
+// entra na coleção, e a devolutiva é o canal de saída dos dois casos.
+async function gravarPropostas(){
+  const linhas = propostasEfetivas();
+  if (!linhas.length) return true;
+  const { error } = await sb.from('propostas_cadastro').insert(
+    linhas.map(l => Object.assign({ documento_id: docAtual.id, usuario_id: usuario.id }, l)));
+  if (error) { alert('Erro ao gravar as correções propostas: ' + error.message); return false; }
+  return true;
+}
+
 async function salvar(){
   if (patrimonial === null) { alert('Responda primeiro se a norma é patrimonial.'); return; }
 
@@ -1100,6 +1265,7 @@ async function salvar(){
       termos: [], campos: { recusada:'não é norma patrimonial', motivo: campos.motivo_recusa || null }
     });
     if (error) { alert('Erro ao salvar: ' + error.message); return; }
+    if (!await gravarPropostas()) return;
     await soltarTrava(docAtual.id);   // gravou: a reserva não tem mais razão de existir
     voltar(); return;
   }
@@ -1177,6 +1343,7 @@ async function salvar(){
       descricao: 'Proposto durante a indexação de "' + docAtual.titulo + '". Não consta do vocabulário.'
     });
   }
+  if (!await gravarPropostas()) return;
   await soltarTrava(docAtual.id);     // gravou: a reserva não tem mais razão de existir
   voltar();
 }
