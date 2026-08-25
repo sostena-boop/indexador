@@ -309,6 +309,10 @@ let naoPublicados = {};     // item_id do Tainacan -> 'draft' | 'private'
 // Compilação: feita FORA daqui, no DOCX do SharePoint. A ferramenta só registra.
 // Dois campos e não um: "precisa" é resposta de quem indexa, "compilada" é fato
 // posterior — com um só, a lista de pendências nunca esvazia.
+// Quais seções estão abertas AGORA. Zerado ao abrir outra norma, para que toda norma
+// comece recolhida — mas preservado entre redesenhos da mesma, senão cada clique num
+// botão de dentro fecha a seção na cara de quem está preenchendo.
+let secoesAbertas = {};
 let temRascunho = false;    // há rascunho salvo desta norma, meu ou de outra pessoa
 let precisaCompilar = null;
 let compilada = null;
@@ -609,6 +613,7 @@ async function abrir(id){
   propostas = {}; linhaPlanilha = null;
   precisaCompilar = d.precisa_compilar; compilada = d.compilada; linkDocx = null;
   temRascunho = !!(d.rascunho && typeof d.rascunho === 'object');
+  secoesAbertas = {};   // norma nova começa com as três recolhidas
 
   // data_assinatura ainda não existe em `documentos` — o valor atual vem da planilha
   if (d.item_id_tainacan) {
@@ -954,18 +959,20 @@ function blocoCadastro(){
 
     let entrada;
     if (c.area) {
-      entrada = `<textarea rows="3" onchange="setProposta('${c.k}',this.value)"
+      entrada = `<textarea rows="3" oninput="setProposta('${c.k}',this.value)"
                    placeholder="valor proposto">${esc(p.valor)}</textarea>`;
     } else if (c.lista) {
       const opcoes = (c.lista === 'tipos'
         ? [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort()
         : orgaos);
       entrada = `<input type="text" list="lista_${c.k}" value="${esc(p.valor)}"
-                   onchange="setProposta('${c.k}',this.value)" placeholder="valor proposto">
+                   oninput="setProposta('${c.k}',this.value)" placeholder="valor proposto">
                  <datalist id="lista_${c.k}">${opcoes.map(o => `<option value="${esc(o)}">`).join('')}</datalist>`;
     } else {
+      // campo de data leva a máscara; os demais recebem o valor cru
+      const ent = /dd\/mm/.test(c.dica || '') ? 'mascaraData(this)' : 'this.value';
       entrada = `<input type="text" value="${esc(p.valor)}" placeholder="${esc(c.dica || 'valor proposto')}"
-                   onchange="setProposta('${c.k}',this.value)">`;
+                   oninput="setProposta('${c.k}', ${ent})">`;
     }
 
     return `<div class="campo cadastro proposto">
@@ -1102,10 +1109,10 @@ function renderFicha(){
       </select></div>
     <div class="campo"><label>Início de vigência</label>
       <input type="text" placeholder="dd/mm/aaaa" value="${esc(campos.data_inicio_vigencia||'')}"
-             onchange="setCampo('data_inicio_vigencia',this.value)"></div>
+             oninput="setCampo('data_inicio_vigencia', mascaraData(this))"></div>
     <div class="campo"><label>Revogado em</label>
       <input type="text" placeholder="dd/mm/aaaa" value="${esc(campos.revogado_em||'')}"
-             onchange="setCampo('revogado_em',this.value)"></div>
+             oninput="setCampo('revogado_em', mascaraData(this))"></div>
 
     <h3 class="blo">Relações entre normas</h3>
     <div class="ajuda" style="margin-bottom:10px">Detectadas na ementa e no Art. 1º. Confirme uma a uma — o trecho que originou cada detecção está à vista.</div>
@@ -1141,7 +1148,7 @@ function renderFicha(){
     </div>
 
     <div class="campo"><label>Observações</label>
-      <textarea rows="2" onchange="setCampo('observacoes',this.value)">${esc(campos.observacoes||'')}</textarea></div>
+      <textarea rows="2" oninput="setCampo('observacoes',this.value)">${esc(campos.observacoes||'')}</textarea></div>
 
     <div class="campo">
       <label><input type="checkbox" ${docAtual.em_duvida?'checked':''} onchange="setDuvida(this.checked)">
@@ -1169,12 +1176,41 @@ function renderFicha(){
 
 /* ---------- as três seções ---------- */
 
-/* As três seções nascem SEMPRE recolhidas — decisão de 25/08. O primeiro contato mostra
-   três decisões em vez de trinta campos, e quem indexa abre na ordem que preferir.
-   O aviso não abre a seção; ele aparece como marca no cabeçalho, que é o que diz onde
-   olhar sem desfazer o recolhimento. */
+/* As três seções nascem recolhidas AO ABRIR A NORMA — o primeiro contato mostra três
+   decisões em vez de trinta campos. "Recolhida" vale para o primeiro desenho, não para
+   cada redesenho: quase todo botão da ficha chama `renderFicha()`, e sem guardar o estado
+   a seção fechava a cada clique, no meio do preenchimento.
+   O aviso não abre a seção; aparece como marca no cabeçalho. */
+function alternarSecao(id, aberta){ secoesAbertas[id] = aberta; }
+
+/* Barras automáticas em dd/mm/aaaa. Insere separador e nada mais: não reordena, não
+   completa dígito e não impede apagar — quem digita continua no comando. Quem cola a
+   data já formatada passa incólume. O cursor é recolocado no fim só quando a digitação
+   é no fim, para não pular ao editar o meio. */
+function mascaraData(el){
+  const noFim = el.selectionStart === el.value.length;
+  const d = el.value.replace(/\D/g, '').slice(0, 8);
+  let v = d;
+  if (d.length > 4)      v = d.slice(0, 2) + '/' + d.slice(2, 4) + '/' + d.slice(4);
+  else if (d.length > 2) v = d.slice(0, 2) + '/' + d.slice(2);
+  el.value = v;
+  if (noFim) el.setSelectionRange(v.length, v.length);
+  return v;
+}
+
+/* Data que não existe — 31/02, mês 13 — vira aviso, nunca bloqueio: o campo pode estar
+   sendo digitado ainda, e travar no meio da digitação é pior que aceitar e apontar. */
+function dataImpossivel(v){
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v || '');
+  if (!m) return false;
+  const [dd, mm, aa] = [+m[1], +m[2], +m[3]];
+  const dt = new Date(aa, mm - 1, dd);
+  return !(dt.getDate() === dd && dt.getMonth() === mm - 1 && dt.getFullYear() === aa);
+}
+
 function secao(id, rotulo, marca, conteudo){
-  return `<details class="secao" id="sec_${id}">
+  return `<details class="secao" id="sec_${id}" ${secoesAbertas[id] ? 'open' : ''}
+      ontoggle="alternarSecao('${id}', this.open)">
     <summary>${esc(rotulo)}
       ${marca ? `<span class="secao-marca${marca.grave ? '' : ' ok'}">${esc(marca.texto)}</span>` : ''}</summary>
     <div class="conteudo">${conteudo}</div>
@@ -1292,7 +1328,7 @@ function renderTriagem(){
       <div class="campo"><label>Motivo da recusa</label>
         <input type="text" id="motivoRec" value="${esc(campos.motivo_recusa||'')}"
                placeholder="ex.: trata de diárias e passagens"
-               onchange="setCampo('motivo_recusa', this.value)"></div>
+               oninput="setCampo('motivo_recusa', this.value)"></div>
       <div class="aviso">Ao salvar, a norma segue para conferência já marcada como
         <b>recusada por não ser patrimonial</b>. Assunto e palavras-chave não são preenchidos.</div>
       <!-- O cadastro aparece mesmo na norma recusada: título errado é erro de registro
