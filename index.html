@@ -94,15 +94,6 @@ details.secao > .conteudo { padding:16px; }
   padding:2px 9px; border-radius:999px; background:var(--bad-bg); color:var(--bad); }
 .secao-marca.ok { background:var(--ok-bg); color:var(--ok); }
 
-details.sistema { margin-top:18px; border:1px solid var(--line); border-radius:10px; background:#fbfaf6; padding:10px 12px; }
-details.sistema > summary { cursor:pointer; font-size:12.5px; font-weight:600; color:var(--muted); }
-details.sistema[open] > summary { margin-bottom:4px; }
-.sis { display:flex; gap:10px; padding:3px 0; font-size:12.5px; border-top:1px solid var(--line); }
-.sis:first-of-type { border-top:none; }
-.sis-r { flex:0 0 130px; color:var(--muted); }
-.sis-v { flex:1; word-break:break-all; color:var(--ink); }
-.sis-v.falta { color:var(--warn); font-style:italic; }
-
 table.fila { width:100%; border-collapse:collapse; font-size:13.5px; }
 table.fila th { text-align:left; padding:9px 10px; border-bottom:2px solid var(--line); color:var(--muted);
   font-size:11.5px; text-transform:uppercase; letter-spacing:.5px; }
@@ -193,8 +184,7 @@ table.fila tr.trecho:hover td { background:transparent; }
 
 <header><div class="wrap">
   <div>
-    <h1>Indexador — Legislação e Normativos</h1>
-    <p>Memória SPU · revisão de especialista</p>
+    <h1>Indexador - MemóriaSPU - Legislação Patrimonial</h1>
   </div>
   <div class="who" id="who"></div>
 </div></header>
@@ -220,19 +210,13 @@ table.fila tr.trecho:hover td { background:transparent; }
             <option value="concluido">Prontas — conferidas pelos dois</option>
           </select>
           <input type="text" id="fTitulo" placeholder="buscar no título, número ou texto da norma" style="width:290px"
-                 oninput="buscaAtrasada()" autocomplete="off">
+                 oninput="if(!compondo(event)) buscaAtrasada()" autocomplete="off">
           <select id="fTipo" onchange="carregarFila()"><option value="">Todos os tipos</option></select>
           <select id="fOrdem" onchange="carregarFila()">
             <option value="recente">Ano — mais recentes primeiro</option>
             <option value="antiga">Ano — mais antigas primeiro</option>
             <option value="fila">Ordem da fila</option>
           </select>
-          <label style="font-size:13px;display:flex;gap:6px;align-items:center">
-            <input type="checkbox" id="fTexto" checked onchange="carregarFila()"> só com texto integral
-          </label>
-          <label style="font-size:13px;display:flex;gap:6px;align-items:center" title="normas em que o ano não foi identificado">
-            <input type="checkbox" id="fSemAno" onchange="carregarFila()"> só sem ano
-          </label>
           <button class="b sec" onclick="exportarExcel()"
                   title="planilha para a equipe do repositório — a preparação do CSV de carga é feita por eles">Exportar Excel</button>
                     <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
@@ -494,7 +478,10 @@ async function carregarBase(){
   orgaos = [...new Set((orgs || []).flatMap(o => (o.orgao_edicao || '').split('||'))
     .map(s => s.trim()).filter(s => s && s !== '[Sem informação]'))].sort();
 
-  const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort();  // acervo já vem sem os fora de escopo
+  // A lista sai dos tipos que existem no acervo. `Retificação` entra à força porque ainda
+  // não há norma com esse tipo — ele depende da decisão do repositório — e sem estar no
+  // filtro ninguém consegue procurar as retificações no dia em que a decisão sair.
+  const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean).concat('Retificação'))].sort();
   document.getElementById('fTipo').innerHTML = '<option value="">Todos os tipos</option>' +
     uniq.map(t => `<option>${esc(t)}</option>`).join('');
 }
@@ -509,12 +496,10 @@ function buscaAtrasada(){
 async function carregarFila(){
   const st = document.getElementById('fEstagio').value;
   const tipo = document.getElementById('fTipo').value;
-  const soTexto = document.getElementById('fTexto').checked;
+
   const busca = (document.getElementById('fTitulo').value || '').trim();
   const ordem = document.getElementById('fOrdem').value;
-  const semAno = document.getElementById('fSemAno').checked;
-  // Fora do filtro, a norma sem ano fica no fim: ausência de ano não é "muito antiga",
-  // é desconhecida. Para trabalhar nesse grupo existe o filtro próprio.
+  // Norma sem ano vai para o fim: ausência de ano não é "muito antiga", é desconhecida.
   const porAno = (a, b) => {
     const x = a.ano_publicacao, y = b.ano_publicacao;
     if (!x && !y) return 0;
@@ -528,8 +513,7 @@ async function carregarFila(){
     // busca por título, número, ementa E texto integral, com trecho do achado.
     // O estágio deixa de filtrar: quem procura uma norma quer achá-la em qualquer fila.
     const { data } = await sb.rpc('buscar_normas', { termo: busca, limite: 80 });
-    linhas = (data || []).filter(d => (!tipo || d.tipo_norma === tipo) && (!soTexto || d.tem_texto)
-                                   && (!semAno || !d.ano_publicacao));
+    linhas = (data || []).filter(d => !tipo || d.tipo_norma === tipo);
     // na busca, "ordem da fila" quer dizer manter o ranqueamento por relevância
     if (ordem !== 'fila') linhas.sort(porAno);
     count = linhas.length;
@@ -545,8 +529,6 @@ async function carregarFila(){
     else q = q.order('ano_publicacao', { ascending: ordem === 'antiga', nullsFirst: false })
                .order('titulo', { ascending: true });
     if (tipo) q = q.eq('tipo_norma', tipo);
-    if (soTexto) q = q.not('texto','is',null);
-    if (semAno) q = q.is('ano_publicacao', null);
     const r = await q;
     linhas = (r.data || []).map(d => ({ ...d, tem_texto: !!d.texto }));
     count = r.count || 0;
@@ -640,6 +622,11 @@ async function abrir(id){
     campos = Object.assign({}, ant.campos || {});
     selAssuntos = (campos.assuntos || []).slice();
     selPalavras = (ant.termos || []).filter(t => t.decisao !== 'rejeitado').map(t => t.termo);
+    // Legislação relacionada é montada das relações confirmadas MAIS o que se buscou à mão.
+    // Sem restaurar as duas, o estágio seguinte abria o campo vazio como se nada tivesse
+    // sido registrado — e o trabalho estava gravado, só não era lido de volta.
+    legisManuais = (campos.legis_manuais || []).slice();
+    decisoesRel = Object.assign({}, campos.decisoes_rel || {});
   } else {
     campos.situacao_norma = d.situacao_norma || '';
   }
@@ -677,10 +664,6 @@ async function abrir(id){
   const credito = jaFizeram.map(e =>
     `<span class="pill ${e.estagio}">${esc(ESTAGIO[e.estagio] || e.estagio)}: ` +
     `${esc(nomeDe(e.usuario_id))} · ${dataCurta(e.criado_em)}</span>`).join(' ');
-  // 9 das 656 normas não têm public_url; nessas o botão não aparece, em vez de levar a lugar nenhum
-  const linkMemoria = d.public_url
-    ? ` <a class="b sec" href="${esc(d.public_url)}" target="_blank" rel="noopener"
-           title="abre a ficha desta norma no Memória SPU">abrir no Memória SPU</a>` : '';
   const avisoTrava = travaDeOutro
     ? ` <span class="pill duv" title="A reserva expira sozinha em ${horasTrava()}h">` +
       `${esc(nomeDe(travaDeOutro.em_andamento_por))} está com esta norma desde ` +
@@ -692,7 +675,6 @@ async function abrir(id){
     (d.fonte === 'ocr' ? ' <span class="pill duv">texto de OCR — conferir números</span>' : '') +
     (d.em_duvida ? ' <span class="pill duv">marcado com dúvida</span>' : '') +
     (avisosTopo() ? ' ' + avisosTopo() : '') +
-    linkMemoria +
     (travaDeOutro ? '' : ` <button class="b sec" onclick="devolverAFila()" title="tira a sua reserva e devolve a norma à fila dos outros">devolver à fila</button>`) +
     (nAlt && nDisp ? ` <button class="b" onclick="gerarCompilado()" title="${nAlt} alteração(ões) registrada(s)">gerar texto compilado (.docx)</button>` : '');
   // a triagem só é perguntada uma vez: se o estágio anterior já decidiu, herda
@@ -799,49 +781,6 @@ function sugerirPalavras(){
 function limiteAssuntos(){ return config.limite_assuntos || 3; }
 function limitePalavras(){ return config.limite_palavras_chave || 6; }
 
-/* ---------- campos de sistema do Tainacan ----------
-   Ninguém edita, mas a carga precisa devolvê-los IDÊNTICOS: se vierem vazios, a
-   reimportação corrompe o item. O bloco existe para conferência — e, hoje, sobretudo
-   para tornar visível uma lacuna: o Indexador guarda 3 dos 10. Os outros 7 só existem
-   no XLSX do lote, e um CSV gerado só daqui sairia com eles em branco.
-   (O `AGENTS.md` dizia que estavam em `planilha_sync.sistema_tainacan`; esse campo é
-   `{}` vazio nas 646 linhas.) */
-const CAMPOS_SISTEMA = [
-  { k: 'special_document',       r: 'Documento' },
-  { k: 'special_item_status',    r: 'Situação do item' },
-  { k: 'modification_date',      r: 'Última modificação' },
-  { k: 'special_thumbnail',      r: 'Miniatura' },
-  { k: 'special_attachments',    r: 'Anexos' },
-  { k: 'special_comment_status', r: 'Comentários' },
-  { k: 'special_item_author',    r: 'Autoria do item' },
-  { k: 'special_item_slug',      r: 'Slug' },
-  { k: 'creation_date',          r: 'Criação' },
-  { k: 'user_last_modified',     r: 'Modificado por' },
-];
-
-function blocoSistema(){
-  const t = linhaTainacan || {};
-  const linhas = CAMPOS_SISTEMA.map(c => {
-    const v = t[c.k];
-    const temNoBanco = Object.prototype.hasOwnProperty.call(t, c.k);
-    return `<div class="sis">
-      <span class="sis-r">${c.r}</span>
-      ${temNoBanco
-        ? `<span class="sis-v">${v ? esc(String(v).slice(0, 110)) : '<i>vazio</i>'}</span>`
-        : '<span class="sis-v falta">não guardado no Indexador — vem do lote no export</span>'}
-    </div>`;
-  }).join('');
-  const guardados = CAMPOS_SISTEMA.filter(c => Object.prototype.hasOwnProperty.call(t, c.k)).length;
-  return `<details class="sistema">
-    <summary>Campos de sistema do Tainacan — ${guardados} de ${CAMPOS_SISTEMA.length} guardados aqui</summary>
-    <div class="ajuda" style="margin:8px 0 10px">
-      Não são editáveis. A carga precisa devolvê-los <b>idênticos</b>: se vierem vazios, a
-      reimportação corrompe o item. Hoje o Indexador guarda ${guardados}; os demais só existem
-      na planilha do lote e precisam sair de lá no momento do export.
-    </div>
-    ${linhas}
-  </details>`;
-}
 
 /* ---------- avisos automáticos ----------
    A ferramenta já sabe coisas que quem revisa não tem como ver. Cada aviso aparece junto
@@ -989,12 +928,8 @@ function blocoCadastro(){
   const extras = (valorAtual('orgao_edicao_1') || valorAtual('orgao_edicao_2'))
     ? ((docAtual.orgao_edicao || '').split('||').map(s => s.trim()).filter(Boolean).slice(2))
     : [];
-  return `<h3 class="blo" style="margin-top:0">Cadastro</h3>
-    <div class="ajuda" style="margin-bottom:10px">
-      Estes campos são de certificação da equipe do repositório. O que você corrigir aqui
-      <b>não altera o registro</b>: sai como proposta na devolutiva do lote, para eles validarem.
-      ${n ? `<b>${n} correção(ões) proposta(s) nesta norma.</b>` : ''}
-    </div>
+  return `${n ? `<div class="ajuda" style="margin-bottom:10px"><b>${n} correção(ões)
+      proposta(s) nesta norma.</b></div>` : ''}
     ${avisoTitulo()}
     ${extras.length ? `<div class="aviso"><b>Esta norma tem ${extras.length + 2} órgãos emissores</b>,
       e a carga comporta dois. Além dos dois abaixo consta: ${esc(extras.join(' · '))}.
@@ -1043,8 +978,8 @@ function renderFicha(){
       <div class="ajuda">Escolha o nível que corresponde ao que a norma trata — qualquer um serve, não precisa descer até a folha. Os ancestrais do que você escolher ficam implícitos e não são registrados.</div>
     </div>
     ${avisoArvore ? `<div class="aviso">${esc(avisoArvore)}</div>` : ''}
+    <div class="ajuda" style="margin-bottom:5px">Clique na seta para abrir o ramo; clique no nome para escolher o assunto.</div>
     <div class="arvore" id="arvoreBox">${renderArvore()}</div>
-    <div class="ajuda" style="margin-top:5px">Clique na seta para abrir o ramo; clique no nome para escolher o assunto.</div>
 
     <h3 class="blo">Regime</h3>
     ${campoRegime()}
@@ -1078,7 +1013,7 @@ function renderFicha(){
     <div class="campo">
       <label>Buscar no vocabulário inteiro — ${palavras.length} termos</label>
       <input type="text" id="buscaPc" value="${esc(buscaPalavra)}" placeholder="digite parte do termo"
-             oninput="buscarPalavra(this.value)" autocomplete="off">
+             oninput="if(!compondo(event)) buscarPalavra(this.value)" autocomplete="off">
       <div class="ajuda">Para termos corretos que a norma não escreve com essas palavras — a sugestão automática nunca os encontra.</div>
       ${buscaPalavra.length >= 2 ? `
         <div style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
@@ -1102,6 +1037,7 @@ function renderFicha(){
 
     <h3 class="blo">Situação e vigência</h3>
     ${avisoSituacao()}
+    ${avisoRevogadoEm()}
     <div class="campo"><label>Situação da norma</label>
       <select onchange="setSituacao(this.value)">
         <option value="">—</option>
@@ -1109,10 +1045,12 @@ function renderFicha(){
       </select></div>
     <div class="campo"><label>Início de vigência</label>
       <input type="text" placeholder="dd/mm/aaaa" value="${esc(campos.data_inicio_vigencia||'')}"
-             oninput="setCampo('data_inicio_vigencia', mascaraData(this))"></div>
+             oninput="setCampo('data_inicio_vigencia', mascaraData(this)); criticarData(this)">
+      ${criticaData(campos.data_inicio_vigencia)}</div>
     <div class="campo"><label>Revogado em</label>
       <input type="text" placeholder="dd/mm/aaaa" value="${esc(campos.revogado_em||'')}"
-             oninput="setCampo('revogado_em', mascaraData(this))"></div>
+             oninput="setCampo('revogado_em', mascaraData(this)); criticarData(this)">
+      ${criticaData(campos.revogado_em)}</div>
 
     <h3 class="blo">Relações entre normas</h3>
     <div class="ajuda" style="margin-bottom:10px">Detectadas na ementa e no Art. 1º. Confirme uma a uma — o trecho que originou cada detecção está à vista.</div>
@@ -1134,7 +1072,7 @@ function renderFicha(){
 
     <div class="campo"><label>Buscar norma no acervo para relacionar</label>
       <input type="text" id="buscaNorma" value="${esc(buscaLegis)}" placeholder="digite parte do título ou o número"
-             oninput="buscarNorma(this.value)" autocomplete="off">
+             oninput="if(!compondo(event)) buscarNorma(this.value)" autocomplete="off">
       ${buscaLegis.length >= 3 ? `
         <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
           ${resultadosNorma().length ? resultadosNorma().slice(0,25).map(d => `
@@ -1163,7 +1101,7 @@ function renderFicha(){
   // travar a ordem obrigaria a voltar a uma seção já fechada.
   document.getElementById('ficha').innerHTML = `
     ${blocoTriagem()}
-    ${secao('cadastral',  'Revisão cadastral',   marcaCadastro(),   blocoCadastro() + blocoSistema())}
+    ${secao('cadastral',  'Revisão cadastral',   marcaCadastro(),   blocoCadastro())}
     ${secao('indexacao',  'Indexação',           marcaIndexacao(),  miolo)}
     ${secao('compilacao', 'Compilação do texto', marcaCompilacao(), blocoCompilacao())}
 
@@ -1198,6 +1136,30 @@ function mascaraData(el){
   return v;
 }
 
+/* Crítica ao lado do campo, sem redesenhar a ficha — redesenhar por cima de quem digita
+   é o que quebrava o acento e engolia o que estava escrito. O aviso é escrito direto no
+   DOM, no irmão seguinte do input. */
+function criticarData(el){
+  const alvo = el.parentElement.querySelector('.critica-data');
+  const txt = dataImpossivel(el.value) ? 'Esta data não existe.' : '';
+  if (alvo) { alvo.textContent = txt; alvo.style.display = txt ? '' : 'none'; }
+}
+function criticaData(v){
+  return `<div class="ajuda critica-data" style="color:var(--bad)${dataImpossivel(v) ? '' : ';display:none'}">${
+    dataImpossivel(v) ? 'Esta data não existe.' : ''}</div>`;
+}
+
+/* Contradição dentro da própria ficha: situação diz vigente e "revogado em" está preenchido.
+   Mais barata de achar que a do grafo — não depende de relação detectada, só dos dois
+   campos que a pessoa acabou de preencher. */
+function avisoRevogadoEm(){
+  const s = campos.situacao_norma || '';
+  const r = (campos.revogado_em || '').trim();
+  if (!r || !/^vigente/i.test(s)) return '';
+  return `<div class="aviso"><b>A situação diz “${esc(s)}” e há data de revogação preenchida
+    (${esc(r)}).</b> Uma das duas está errada — confira antes de concluir.</div>`;
+}
+
 /* Data que não existe — 31/02, mês 13 — vira aviso, nunca bloqueio: o campo pode estar
    sendo digitado ainda, e travar no meio da digitação é pior que aceitar e apontar. */
 function dataImpossivel(v){
@@ -1207,6 +1169,12 @@ function dataImpossivel(v){
   const dt = new Date(aa, mm - 1, dd);
   return !(dt.getDate() === dd && dt.getMonth() === mm - 1 && dt.getFullYear() === aa);
 }
+
+/* Acento morto (~ ^ `) é composto em duas teclas: o teclado guarda o acento e só o une à
+   vogal seguinte. Redesenhar a ficha entre as duas destrói o campo, o acento fica órfão e
+   sai "Incorporaçao" ou "ç˜ao". Estas duas funções resolvem os dois lados: não redesenhar
+   no meio da composição. Devolver o foco e o cursor as próprias funções de busca já fazem. */
+function compondo(ev){ return !!(ev && (ev.isComposing || ev.keyCode === 229)); }
 
 function secao(id, rotulo, marca, conteudo){
   return `<details class="secao" id="sec_${id}" ${secoesAbertas[id] ? 'open' : ''}
@@ -1253,9 +1221,6 @@ function blocoCompilacao(){
         <button class="b ${precisaCompilar === false ? '' : 'sec'}"
                 onclick="setPrecisaCompilar(false)">não</button>
       </div>
-      <div class="ajuda" style="margin-top:6px">Compilar é consolidar no texto as alterações
-      que outras normas fizeram nesta. O trabalho é feito no próprio arquivo do SharePoint;
-      aqui só fica o registro.</div>
     </div>
     ${precisaCompilar !== true ? '' : `
       ${linkDocx ? comLink : semLink}
@@ -1393,9 +1358,10 @@ function selecionarNo(id){
   const asc = ancestrais(id), desc = descendentes(id);
   const redundantes = selAssuntos.filter(s => asc.includes(s));
   if (redundantes.length) {
+    // O ancestral sai em silêncio: a ajuda acima da árvore já diz, o tempo todo, que os
+    // ancestrais ficam implícitos e não são registrados. Avisar a cada clique repetia
+    // uma regra que já está escrita. As outras duas mensagens desta função continuam.
     selAssuntos = selAssuntos.filter(s => !asc.includes(s));
-    avisoArvore = 'Removi ' + redundantes.map(r => porId[r].termo).join(', ') +
-                  ' — é ancestral do que você acabou de escolher e fica implícito no caminho.';
   }
   if (selAssuntos.some(s => desc.includes(s))) {
     avisoArvore = 'Você já escolheu um assunto mais específico dentro deste ramo. ' +
@@ -1643,7 +1609,7 @@ async function salvar(modo){
       patrimonial: false, motivo_recusa: campos.motivo_recusa || null,
       termos: [], campos: { recusada:'não é norma patrimonial', motivo: campos.motivo_recusa || null }
     });
-    if (error) { alert('Erro ao salvar: ' + error.message); return; }
+    if (error) { alert(explicarErroDeEtapa(error)); return; }
     if (!await gravarPropostas()) return;
     await soltarTrava(docAtual.id);   // gravou: a reserva não tem mais razão de existir
     voltar(); return;
@@ -1666,6 +1632,10 @@ async function salvar(modo){
 
   const fichaFinal = Object.assign({}, campos, {
     assuntos: selAssuntos,
+    // guardados crus para a etapa seguinte reconstruir a tela: sem eles, quem confere não
+    // via a legislação relacionada nem as relações que o estágio anterior confirmou
+    legis_manuais: legisManuais,
+    decisoes_rel: decisoesRel,
     assuntos_caminho: selAssuntos.map(id => (porId[id]||{}).caminho || ''),
     legislacao_relacionada: legisIds.join('||'),
     legislacao_relacionada_titulos: relacionadas.map(x => x.titulo),
@@ -1705,7 +1675,7 @@ async function salvar(modo){
     documento_id: docAtual.id, estagio: estagioAtual, usuario_id: usuario.id,
     patrimonial: true, termos, campos: fichaFinal
   });
-  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  if (error) { alert(explicarErroDeEtapa(error)); return; }
 
   for (const r of relAtual) {
     if (decisoesRel[r.id]) {
@@ -1729,6 +1699,19 @@ async function salvar(modo){
   temRascunho = false;   // concluiu: o rascunho deixou de existir e não segura mais nada
   await soltarTrava(docAtual.id);     // gravou: a reserva não tem mais razão de existir
   voltar();
+}
+
+/* A recusa por quatro olhos não é falha: é a regra funcionando. Mostrá-la como
+   "Erro ao salvar: <mensagem do banco>" faz parecer defeito e leva quem usa a tentar de
+   novo. Aqui ela é explicada, e o resto continua sendo erro de verdade. */
+function explicarErroDeEtapa(error){
+  const m = (error && error.message) || '';
+  if (/j[áa] atuou em outro est[áa]gio/i.test(m)) {
+    return 'Você já trabalhou nesta norma em outro estágio, e a conferência é feita por ' +
+           'outra pessoa — são dois pares de olhos.\n\nNada se perdeu: use "salvar rascunho" ' +
+           'se quiser guardar o que fez, e passe a norma a um colega para a conferência.';
+  }
+  return 'Erro ao salvar: ' + m;
 }
 
 async function gravarCompilacao(){
