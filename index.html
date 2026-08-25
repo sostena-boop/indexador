@@ -75,6 +75,25 @@ button.b.mini, a.b.mini { padding:4px 10px; font-size:12px; border-radius:7px; }
 .campo.cadastro.proposto > button { margin-top:6px; }
 
 /* Campos de sistema: recolhidos, cinzentos, sem cara de campo editável. */
+/* Acordeão das três seções. A ficha inteira aberta de uma vez era muro de campos;
+   recolhida, o primeiro contato mostra três decisões em vez de trinta. Seção com aviso
+   dentro NASCE ABERTA e leva marca no cabeçalho — aviso escondido é aviso que não existe,
+   e o de situação é justamente o que revela as 61 normas com situação contraditória. */
+details.secao { margin:0 0 14px; border:1px solid var(--line); border-radius:12px;
+  background:#fff; overflow:hidden; }
+details.secao > summary { cursor:pointer; padding:13px 16px; list-style:none;
+  font-family:"Fraunces",serif; font-weight:600; font-size:15px; color:var(--accent-dark);
+  display:flex; align-items:center; gap:10px; background:#fbfaf6; }
+details.secao > summary::-webkit-details-marker { display:none; }
+details.secao > summary::before { content:"▸"; font-family:system-ui,sans-serif;
+  font-size:12px; color:var(--muted); transition:transform .12s; }
+details.secao[open] > summary::before { transform:rotate(90deg); }
+details.secao[open] > summary { border-bottom:1px solid var(--line); }
+details.secao > .conteudo { padding:16px; }
+.secao-marca { margin-left:auto; font-size:11px; font-weight:600; letter-spacing:.02em;
+  padding:2px 9px; border-radius:999px; background:var(--bad-bg); color:var(--bad); }
+.secao-marca.ok { background:var(--ok-bg); color:var(--ok); }
+
 details.sistema { margin-top:18px; border:1px solid var(--line); border-radius:10px; background:#fbfaf6; padding:10px 12px; }
 details.sistema > summary { cursor:pointer; font-size:12.5px; font-weight:600; color:var(--muted); }
 details.sistema[open] > summary { margin-bottom:4px; }
@@ -287,6 +306,13 @@ let linhaPlanilha = null;   // campos que existem na planilha e não em `documen
 let linhaTainacan = null;   // os poucos campos de sistema que o Indexador guarda
 let duplicadas = {};        // documento_id -> outras normas com mesmo tipo, número e data
 let naoPublicados = {};     // item_id do Tainacan -> 'draft' | 'private'
+// Compilação: feita FORA daqui, no DOCX do SharePoint. A ferramenta só registra.
+// Dois campos e não um: "precisa" é resposta de quem indexa, "compilada" é fato
+// posterior — com um só, a lista de pendências nunca esvazia.
+let temRascunho = false;    // há rascunho salvo desta norma, meu ou de outra pessoa
+let precisaCompilar = null;
+let compilada = null;
+let linkDocx = null;        // URL do arquivo tratado, vinda de planilha_sync
 
 // Os campos cadastrais que a equipe de indexação pode propor correção (decisão de 21/08).
 // `public_url`, arquivos e os special_* ficam de fora: não são editáveis.
@@ -581,12 +607,17 @@ async function abrir(id){
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
   legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
   propostas = {}; linhaPlanilha = null;
+  precisaCompilar = d.precisa_compilar; compilada = d.compilada; linkDocx = null;
+  temRascunho = !!(d.rascunho && typeof d.rascunho === 'object');
 
   // data_assinatura ainda não existe em `documentos` — o valor atual vem da planilha
   if (d.item_id_tainacan) {
     const { data: ps } = await sb.from('planilha_sync')
-      .select('data_assinatura').eq('item_id', d.item_id_tainacan).limit(1);
+      .select('data_assinatura,link_arquivo_word').eq('item_id', d.item_id_tainacan).limit(1);
     linhaPlanilha = (ps && ps[0]) || null;
+    // só vale como link o que é URL: em 80 das 118 a coluna trazia apenas o nome do arquivo
+    const lw = (linhaPlanilha && linhaPlanilha.link_arquivo_word) || '';
+    linkDocx = /^https?:\/\//i.test(lw) ? lw : null;
     const { data: ts } = await sb.from('tainacan_sync')
       .select('special_document,special_item_status,modification_date,public_url')
       .eq('item_id', d.item_id_tainacan).limit(1);
@@ -606,6 +637,19 @@ async function abrir(id){
     selPalavras = (ant.termos || []).filter(t => t.decisao !== 'rejeitado').map(t => t.termo);
   } else {
     campos.situacao_norma = d.situacao_norma || '';
+  }
+
+  // Rascunho vence a etapa anterior: é mais recente por definição — só existe porque
+  // alguém salvou sem concluir, depois da última etapa fechada.
+  if (d.rascunho && typeof d.rascunho === 'object') {
+    const r = d.rascunho;
+    campos = Object.assign({}, campos, r.campos || {});
+    if (Array.isArray(r.assuntos)) selAssuntos = r.assuntos.slice();
+    if (Array.isArray(r.palavras)) selPalavras = r.palavras.slice();
+    if (r.decisoesRel) decisoesRel = Object.assign({}, r.decisoesRel);
+    if (Array.isArray(r.legisManuais)) legisManuais = r.legisManuais.slice();
+    if (Array.isArray(r.propostasNovas)) propostasNovas = r.propostasNovas.slice();
+    if (typeof r.patrimonial === 'boolean') patrimonial = r.patrimonial;
   }
 
   const { data: rels } = await sb.from('relacoes_norma')
@@ -662,12 +706,16 @@ async function abrir(id){
 // toda norma que já tivesse qualquer dado — e nada era liberado ao voltar.
 function instantaneoFicha(){
   return JSON.stringify([patrimonial, selAssuntos, selPalavras, decisoesRel, campos,
-                         legisManuais, propostasNovas, rejeitadas, propostas]);
+                         legisManuais, propostasNovas, rejeitadas, propostas,
+                         precisaCompilar, compilada]);
 }
 function fichaTocada(){ return baseFicha !== null && instantaneoFicha() !== baseFicha; }
 async function voltar(){
   const id = docAtual && docAtual.id;
-  const manter = fichaTocada();
+  // Rascunho salvo também segura a reserva. Sem isto a norma com trabalho dentro voltava
+  // para a fila livre: `salvarRascunho` atualiza `baseFicha`, então `fichaTocada()` passa
+  // a ser falso logo depois de salvar — exatamente ao contrário do que se quer.
+  const manter = fichaTocada() || temRascunho;
   docAtual = null; travaDeOutro = null; baseFicha = null;
   document.getElementById('telaDoc').classList.add('hidden');
   document.getElementById('telaFila').classList.remove('hidden');
@@ -974,10 +1022,10 @@ function renderFicha(){
   // de patrimônio a atribuir, e insistir só produziria classificação forçada.
   if (patrimonial !== true) { renderTriagem(); return; }
 
-  document.getElementById('ficha').innerHTML = `
-    ${blocoTriagem()}
-    ${blocoCadastro()}
-    <h3 class="blo">Assunto</h3>
+  // A indexação é montada à parte para não aninhar template dentro de template —
+  // o miolo já tem crase em vários pontos e a legibilidade não sobreviveria.
+  const miolo = `
+    <h3 class="blo" style="margin-top:0">Assunto</h3>
     <div class="campo">
       <label>Selecionados — máximo ${limiteAssuntos()}</label>
       <div>${selAssuntos.length ? selAssuntos.map(id => `
@@ -1101,13 +1149,97 @@ function renderFicha(){
       <div class="ajuda">Equivale à linha amarela da planilha: distingue "não preenchi por dúvida" de "ainda não chegou a vez".</div>
     </div>
 
-    ${blocoSistema()}
+    `;
+
+  // Sem ordem obrigatória: quem indexa abre na sequência que preferir. Conferir a ementa
+  // muitas vezes só é possível DEPOIS de ler o texto, que é o que se faz ao indexar —
+  // travar a ordem obrigaria a voltar a uma seção já fechada.
+  document.getElementById('ficha').innerHTML = `
+    ${blocoTriagem()}
+    ${secao('cadastral',  'Revisão cadastral',   marcaCadastro(),   blocoCadastro() + blocoSistema())}
+    ${secao('indexacao',  'Indexação',           marcaIndexacao(),  miolo)}
+    ${secao('compilacao', 'Compilação do texto', marcaCompilacao(), blocoCompilacao())}
 
     <div class="rodape-acoes">
       <button class="b sec" onclick="voltar()">cancelar</button>
-      <button class="b" onclick="salvar()">salvar e avançar estágio</button>
+      <button class="b sec" onclick="salvar('rascunho')">salvar rascunho</button>
+      <button class="b" onclick="salvar('concluir')">concluir revisão</button>
     </div>`;
 }
+
+/* ---------- as três seções ---------- */
+
+/* As três seções nascem SEMPRE recolhidas — decisão de 25/08. O primeiro contato mostra
+   três decisões em vez de trinta campos, e quem indexa abre na ordem que preferir.
+   O aviso não abre a seção; ele aparece como marca no cabeçalho, que é o que diz onde
+   olhar sem desfazer o recolhimento. */
+function secao(id, rotulo, marca, conteudo){
+  return `<details class="secao" id="sec_${id}">
+    <summary>${esc(rotulo)}
+      ${marca ? `<span class="secao-marca${marca.grave ? '' : ' ok'}">${esc(marca.texto)}</span>` : ''}</summary>
+    <div class="conteudo">${conteudo}</div>
+  </details>`;
+}
+
+function marcaCadastro(){
+  if (avisoTitulo()) return { texto: 'conferir o título', grave: true };
+  const n = Object.keys(propostas).length;
+  return n ? { texto: n + ' correção proposta' + (n > 1 ? 's' : ''), grave: false } : null;
+}
+function marcaIndexacao(){
+  return avisoSituacao() ? { texto: 'situação contraditória', grave: true } : null;
+}
+function marcaCompilacao(){
+  if (precisaCompilar === null) return { texto: 'sem resposta', grave: false };
+  if (precisaCompilar && compilada !== true) return { texto: 'compilação pendente', grave: true };
+  return null;
+}
+
+/* ---------- compilação: registro, não execução ----------
+   A compilação acontece no DOCX do SharePoint, feita pela própria equipe. Aqui só se
+   pergunta se precisa e se já foi — é o que permite, depois, saber se todas as
+   compilações identificadas foram concluídas. */
+function blocoCompilacao(){
+  const semLink = `<div class="aviso">Esta norma ainda não tem link de arquivo registrado.
+    Avise a equipe do Memória SPU para incluí-lo na planilha.</div>`;
+  const comLink = `<div class="campo">
+      <a class="b sec" href="${esc(linkDocx || '')}" target="_blank" rel="noopener"
+         style="text-decoration:none;display:inline-block">abrir o DOCX no SharePoint ↗</a>
+      <div class="ajuda" style="margin-top:7px">Aqui está o link para o arquivo no SharePoint,
+      onde deverá ser realizada a compilação. Caso não tenha acesso à pasta ou ao documento,
+      solicite acesso à equipe do Memória SPU.</div>
+    </div>`;
+  return `<div class="campo">
+      <label>Esta norma precisa ser compilada?</label>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="b ${precisaCompilar === true ? '' : 'sec'}"
+                onclick="setPrecisaCompilar(true)">sim</button>
+        <button class="b ${precisaCompilar === false ? '' : 'sec'}"
+                onclick="setPrecisaCompilar(false)">não</button>
+      </div>
+      <div class="ajuda" style="margin-top:6px">Compilar é consolidar no texto as alterações
+      que outras normas fizeram nesta. O trabalho é feito no próprio arquivo do SharePoint;
+      aqui só fica o registro.</div>
+    </div>
+    ${precisaCompilar !== true ? '' : `
+      ${linkDocx ? comLink : semLink}
+      <div class="campo">
+        <label>A norma já foi compilada?</label>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="b ${compilada === true ? '' : 'sec'}" onclick="setCompilada(true)">sim</button>
+          <button class="b ${compilada === false ? '' : 'sec'}" onclick="setCompilada(false)">ainda não</button>
+        </div>
+        ${compilada === true ? '' : `<div class="ajuda" style="margin-top:6px">
+          Enquanto a compilação estiver pendente dá para <b>salvar rascunho</b> à vontade —
+          o que não dá é concluir a revisão.</div>`}
+      </div>`}`;
+}
+function setPrecisaCompilar(v){
+  precisaCompilar = v;
+  if (v !== true) compilada = null;
+  renderFicha();
+}
+function setCompilada(v){ compilada = v; renderFicha(); }
 
 /* ---------- triagem: é norma patrimonial? ---------- */
 function ehAdministrativa(){
@@ -1169,7 +1301,7 @@ function renderTriagem(){
       ${blocoCadastro()}
       <div class="rodape-acoes">
         <button class="b sec" onclick="voltar()">cancelar</button>
-        <button class="b" onclick="salvar()">salvar recusa e avançar</button>
+        <button class="b" onclick="salvar('concluir')">salvar recusa e avançar</button>
       </div>` : ''}`;
 }
 function blocoTriagem(){
@@ -1438,7 +1570,25 @@ async function gravarPropostas(){
   return true;
 }
 
-async function salvar(){
+/* Salvar e concluir passaram a ser coisas diferentes.
+   `rascunho` grava a ficha em `documentos.rascunho` e NÃO insere etapa — a reserva
+   continua de pé, porque quem parou no meio ainda está com a norma. `concluir` faz o
+   caminho de sempre e fecha a etapa. A separação existe por causa da compilação: ela
+   pode travar por dias esperando acesso ao SharePoint, e perder a revisão cadastral e a
+   indexação já feitas por causa disso seria absurdo. */
+async function salvar(modo){
+  modo = modo || 'concluir';
+
+  if (modo === 'rascunho') return salvarRascunho();
+
+  // Compilação pendente impede CONCLUIR, nunca SALVAR.
+  if (precisaCompilar === true && compilada !== true) {
+    alert('Esta norma está marcada como precisando de compilação, e a compilação ainda ' +
+          'não foi feita.\n\nA revisão não pode ser concluída assim — mas o seu trabalho ' +
+          'não se perde: use "salvar rascunho".');
+    return;
+  }
+
   // A inibição de verdade é aqui, não na fila: a busca alcança a coleção inteira de
   // propósito, e sem esta guarda daria para indexar norma de lote ainda não liberado.
   if (!loteLiberado(docAtual)) {
@@ -1537,8 +1687,62 @@ async function salvar(){
     });
   }
   if (!await gravarPropostas()) return;
+  await gravarCompilacao();
+  await sb.from('documentos').update({ rascunho: null, rascunho_por: null, rascunho_em: null })
+    .eq('id', docAtual.id);
+  temRascunho = false;   // concluiu: o rascunho deixou de existir e não segura mais nada
   await soltarTrava(docAtual.id);     // gravou: a reserva não tem mais razão de existir
   voltar();
+}
+
+async function gravarCompilacao(){
+  if (precisaCompilar === null) return;
+  await sb.from('documentos').update({
+    precisa_compilar: precisaCompilar,
+    compilada: precisaCompilar === true ? (compilada === true) : null,
+    compilacao_por: usuario.id,
+    compilacao_em: new Date().toISOString()
+  }).eq('id', docAtual.id);
+}
+
+async function salvarRascunho(){
+  if (!loteLiberado(docAtual)) {
+    alert('Esta norma está fora do lote em trabalho. Dá para consultar, não para indexar.');
+    return;
+  }
+  const agora = new Date().toISOString();
+  // A reserva é RENOVADA aqui, não presumida. Quem salva rascunho está trabalhando, e a
+  // janela de 4 horas tem de recomeçar — senão a norma com trabalho dentro cai para outra
+  // pessoa enquanto quem começou espera acesso ao SharePoint. E renovar tem de ser
+  // reivindicação, não afirmação: se a norma já for de outro, a mensagem não pode mentir.
+  const { error } = await sb.from('documentos').update({
+    rascunho: { patrimonial, campos, assuntos: selAssuntos, palavras: selPalavras,
+                decisoesRel, legisManuais, propostasNovas },
+    rascunho_por: usuario.id,
+    rascunho_em: agora
+  }).eq('id', docAtual.id);
+  if (error) { alert('Erro ao salvar o rascunho: ' + error.message); return; }
+  await gravarCompilacao();
+  await gravarPropostas();
+
+  const { data: renovou } = await sb.from('documentos')
+    .update({ em_andamento_por: usuario.id, em_andamento_desde: agora })
+    .eq('id', docAtual.id).or(filtroTrava()).select('id');
+  const minha = !!(renovou && renovou.length);
+
+  temRascunho = true;
+  baseFicha = instantaneoFicha();   // o que foi salvo deixa de contar como alteração pendente
+  const r = document.querySelector('.rodape-acoes');
+  if (r) {
+    const m = document.createElement('span');
+    m.className = 'ajuda';
+    m.style.cssText = 'margin-left:12px;color:var(--' + (minha ? 'ok' : 'bad') + ')';
+    m.textContent = 'rascunho salvo ' + new Date().toLocaleTimeString('pt-BR').slice(0, 5) +
+      (minha ? ' — a norma segue reservada para você por mais 4 horas'
+             : ' — atenção: a norma está reservada por outra pessoa');
+    r.querySelectorAll('.ajuda').forEach(x => x.remove());
+    r.appendChild(m);
+  }
 }
 
 /* ---------- norma nova, fora do Memória SPU ----------
