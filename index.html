@@ -191,12 +191,17 @@ table.fila tr.trecho:hover td { background:transparent; }
 
 <main>
   <div id="gate" class="gate">
-    <h2>Quem é você?</h2>
-    <p>Escolha o seu nome na lista. O nome fica registrado em cada revisão, e o sistema
+    <h2>Entrar</h2>
+    <p>Use o seu e-mail institucional. O nome fica registrado em cada revisão, e o sistema
        impede que a mesma pessoa atue em dois estágios do mesmo documento.</p>
-    <div id="perfis"></div>
-    <p class="ajuda" style="margin-top:14px">Não está na lista? Peça à equipe do Memória SPU
-       para incluir o seu nome.</p>
+    <form id="formLogin" onsubmit="fazerLogin(event)">
+      <input id="loginEmail" type="email" autocomplete="username"
+             placeholder="nome.sobrenome@gestao.gov.br" required>
+      <input id="loginSenha" type="password" autocomplete="current-password"
+             placeholder="senha" required>
+      <button class="b" type="submit" id="btnEntrar">Entrar</button>
+    </form>
+    <p class="ajuda" style="margin-top:14px">Sem acesso? Peça à equipe do Memória SPU.</p>
     <div id="gateMsg" style="font-size:13px;margin-top:10px"></div>
   </div>
 
@@ -406,30 +411,79 @@ function realceSeguro(s){
 }
 
 /* ---------- entrada ---------- */
+/* A entrada passou a ser por e-mail e senha em 26/08. Antes era uma lista de nomes sem
+   senha: qualquer pessoa escolhia qualquer um, e a regra dos quatro olhos — que o banco
+   impõe por gatilho — era honra, não controle.
+
+   Não é link mágico nem conta Microsoft. Os dois foram tentados e caíram: o link mágico
+   porque o firewall corporativo bloqueia o e-mail, e o Entra ID porque não é possível
+   registrar o aplicativo no MGI. Senha em sistema paralelo é passivo, e sabemos disso;
+   é o que resta, e é muito melhor que a porta aberta que havia. */
 async function iniciar(){
-  const { data: perfis } = await sb.from('perfis').select('id,nome_exibicao').order('nome_exibicao');
-  (perfis||[]).forEach(p => perfisPorId[p.id] = p.nome_exibicao);
-  document.getElementById('perfis').innerHTML = (perfis||[]).map(p =>
-    `<button class="perfil-btn" onclick="entrar(${arg(p.id)}, ${arg(p.nome_exibicao)})">${esc(p.nome_exibicao)}</button>`).join('');
-  const salvo = localStorage.getItem('indexador_perfil');
-  if (salvo) { const p = (perfis||[]).find(x => x.id === salvo); if (p) entrar(p.id, p.nome_exibicao); }
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) return aposLogin(session);
+  document.getElementById('gate').classList.remove('hidden');
 }
-/* Criar perfil digitando o nome saiu em 26/08. A lista passou a ser fechada: quem indexa
-   escolhe entre os nomes cadastrados, e incluir alguém é ato de quem administra.
-   Dois motivos, e o segundo é o que pesa. Primeiro, a identidade deixava de significar
-   qualquer coisa se cada um pudesse inventar a sua. Segundo, o nome digitado ia parar
-   dentro de um manipulador `onclick` — e é essa a falha que o plano 003 conserta.
-   A escrita anônima em `perfis` continua aberta no banco; fechá-la é o plano 000. */
+
+async function fazerLogin(ev){
+  ev.preventDefault();
+  const msg = document.getElementById('gateMsg');
+  const btn = document.getElementById('btnEntrar');
+  const email = document.getElementById('loginEmail').value.trim();
+  const senha = document.getElementById('loginSenha').value;
+  msg.textContent = 'Entrando…';
+  btn.disabled = true;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password: senha });
+  btn.disabled = false;
+  if (error) {
+    // a mensagem do Supabase vem em inglês e não diz o que fazer
+    msg.textContent = /invalid/i.test(error.message)
+      ? 'E-mail ou senha não conferem. Se esqueceu a senha, peça à equipe do Memória SPU para redefinir.'
+      : 'Não consegui entrar: ' + error.message;
+    return;
+  }
+  msg.textContent = '';
+  await aposLogin(data.session);
+}
+
+/* Autenticar prova QUEM é; a lista de autorizados diz SE pode. São coisas diferentes, e
+   a conta pode existir sem estar liberada — por isso a segunda consulta. */
+async function aposLogin(session){
+  const email = (session.user && session.user.email) || '';
+  const { data: perfil } = await sb.from('perfis')
+    .select('id,nome_exibicao').ilike('email', email).limit(1).maybeSingle();
+
+  if (!perfil) {
+    document.getElementById('gate').classList.remove('hidden');
+    document.getElementById('gateMsg').textContent =
+      'A sua conta entrou, mas o e-mail ' + email + ' não está liberado para usar o ' +
+      'Indexador. Peça à equipe do Memória SPU para incluir.';
+    await sb.auth.signOut();
+    return;
+  }
+
+  const { data: todos } = await sb.from('perfis').select('id,nome_exibicao');
+  (todos || []).forEach(p => perfisPorId[p.id] = p.nome_exibicao);
+
+  // registra a conta no perfil, para o histórico ligar pessoa e login. Falhar aqui não
+  // impede trabalhar: a identidade que vale é o e-mail da sessão.
+  if (session.user) {
+    await sb.from('perfis').update({ user_id: session.user.id }).eq('id', perfil.id);
+  }
+  await entrar(perfil.id, perfil.nome_exibicao);
+}
+
 async function entrar(id, nome){
   usuario = { id, nome };
-  localStorage.setItem('indexador_perfil', id);
   document.getElementById('gate').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
-  document.getElementById('who').innerHTML = `<b>${esc(nome)}</b><button onclick="sair()">sair</button>`;
+  document.getElementById('who').innerHTML =
+    `<b>${esc(nome)}</b><button onclick="sair()">sair</button>`;
   await carregarBase();
   await carregarFila();
 }
-function sair(){ localStorage.removeItem('indexador_perfil'); location.reload(); }
+
+async function sair(){ await sb.auth.signOut(); location.reload(); }
 
 /* ---------- base ---------- */
 async function carregarBase(){
