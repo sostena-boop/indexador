@@ -293,9 +293,9 @@ let baseFicha = null;
 let propostas = {};
 let orgaos = [];            // vocabulário de órgãos observado na coleção
 let linhaPlanilha = null;   // campos que existem na planilha e não em `documentos`
-let linhaTainacan = null;   // os poucos campos de sistema que o Indexador guarda
+
 let duplicadas = {};        // documento_id -> outras normas com mesmo tipo, número e data
-let naoPublicados = {};     // item_id do Tainacan -> 'draft' | 'private'
+
 // Compilação: feita FORA daqui, no DOCX do SharePoint. A ferramenta só registra.
 // Dois campos e não um: "precisa" é resposta de quem indexa, "compilada" é fato
 // posterior — com um só, a lista de pendências nunca esvazia.
@@ -543,12 +543,6 @@ async function carregarBase(){
   Object.values(porChave).filter(g => g.length > 1)
     .forEach(g => g.forEach(d => duplicadas[d.id] = g.filter(x => x.id !== d.id)));
 
-  // Registros que o Tainacan não publica — rascunho ou privado. Só esses vêm; são poucos.
-  const { data: naoPub } = await sb.from('tainacan_sync')
-    .select('item_id,special_item_status').neq('special_item_status', 'publish');
-  naoPublicados = {};
-  (naoPub || []).forEach(r => naoPublicados[r.item_id] = r.special_item_status);
-
   // vocabulário de órgãos observado na própria coleção. A lista canônica é a aba
   // `Nomes_Unidades` da planilha, que ainda não está no banco — até lá, esta serve, e o
   // campo aceita texto livre porque de todo modo é proposta, não gravação.
@@ -690,10 +684,6 @@ async function abrir(id){
     // só vale como link o que é URL: em 80 das 118 a coluna trazia apenas o nome do arquivo
     const lw = (linhaPlanilha && linhaPlanilha.link_arquivo_word) || '';
     linkDocx = /^https?:\/\//i.test(lw) ? lw : null;
-    const { data: ts } = await sb.from('tainacan_sync')
-      .select('special_document,special_item_status,modification_date,public_url')
-      .eq('item_id', d.item_id_tainacan).limit(1);
-    linhaTainacan = (ts && ts[0]) || null;
   }
   // propostas já registradas para esta norma, valendo a mais recente de cada campo
   const { data: prop } = await sb.from('v_propostas_cadastro_vigentes')
@@ -866,7 +856,6 @@ function sugerirPalavras(){
 function limiteAssuntos(){ return config.limite_assuntos || 3; }
 function limitePalavras(){ return config.limite_palavras_chave || 6; }
 
-
 /* ---------- avisos automáticos ----------
    A ferramenta já sabe coisas que quem revisa não tem como ver. Cada aviso aparece junto
    do campo a que se refere, com a evidência ao lado — nunca como tarefa separada. */
@@ -925,11 +914,13 @@ function avisoTitulo(){
 }
 
 // Avisos que valem para a norma inteira, e por isso ficam no topo junto dos outros
+/* Nada aqui vem do Tainacan, e é de propósito. A partir de 26/08/2026 a base do trabalho
+   é a planilha do lote — o export do Tainacan foi o ponto de partida, mas a equipe passou
+   a entregar a planilha já limpa. Havia aqui um aviso de "rascunho/privado no Tainacan";
+   saiu porque exibia dado de uma fonte que não é mais a referência, e dado desses ao lado
+   dos da planilha confunde quem revisa. */
 function avisosTopo(){
   const out = [];
-  const st = naoPublicados[docAtual.item_id_tainacan];
-  if (st) out.push(`<span class="pill duv" title="não aparece na coleção pública">
-    ${st === 'draft' ? 'rascunho no Tainacan' : 'item privado no Tainacan'} — não publicado</span>`);
   const dup = duplicadas[docAtual.id] || [];
   if (dup.length) out.push(`<span class="pill duv"
     title="${esc(dup.map(d => d.titulo).join(' · '))}">possível duplicata:
