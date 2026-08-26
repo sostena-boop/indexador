@@ -133,7 +133,7 @@ table.fila tr.trecho:hover td { background:transparent; }
 .campo .ajuda { font-size:11.5px; color:var(--muted); margin-top:4px; font-style:italic; }
 .campo select, .campo input[type=text] { width:100%; }
 
-.arvore { border:1px solid var(--line); border-radius:10px; max-height:240px; overflow:auto; background:#fff; padding:6px; }
+.arvore { border:1px solid var(--line); border-radius:10px; max-height:360px; overflow:auto; background:#fff; padding:6px; }
 .no { padding:4px 6px; border-radius:6px; cursor:pointer; font-size:13px; display:flex; gap:6px; align-items:baseline; }
 .no:hover { background:var(--ok-bg); }
 .no .cod { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; min-width:78px; }
@@ -303,6 +303,11 @@ let naoPublicados = {};     // item_id do Tainacan -> 'draft' | 'private'
 // comece recolhida — mas preservado entre redesenhos da mesma, senão cada clique num
 // botão de dentro fecha a seção na cara de quem está preenchendo.
 let secoesAbertas = {};
+/* Mesma raiz do estado das seções: renderFicha() reescreve a ficha inteira, então toda
+   caixa rolável dentro dela é destruída e recriada com scrollTop 0. Sem isto, escolher
+   um assunto no meio da árvore joga a lista de volta ao topo, e quem está montando uma
+   seleção de três assuntos procura o lugar de novo a cada clique. */
+let descartarRolagem = false;
 let temRascunho = false;    // há rascunho salvo desta norma, meu ou de outra pessoa
 let precisaCompilar = null;
 let compilada = null;
@@ -675,6 +680,7 @@ async function abrir(id){
   precisaCompilar = d.precisa_compilar; compilada = d.compilada; linkDocx = null;
   temRascunho = !!(d.rascunho && typeof d.rascunho === 'object');
   secoesAbertas = {};   // norma nova começa com as três recolhidas
+  descartarRolagem = true;   // ...e do topo de cada lista, não onde a norma anterior parou
 
   // data_assinatura ainda não existe em `documentos` — o valor atual vem da planilha
   if (d.item_id_tainacan) {
@@ -1042,6 +1048,7 @@ function renderFicha(){
   // A triagem vem primeiro: não sendo norma patrimonial, não há assunto nem palavra-chave
   // de patrimônio a atribuir, e insistir só produziria classificação forçada.
   if (patrimonial !== true) { renderTriagem(); return; }
+  preservarRolagem();
 
   // A indexação é montada à parte para não aninhar template dentro de template —
   // o miolo já tem crase em vários pontos e a legibilidade não sobreviveria.
@@ -1058,7 +1065,7 @@ function renderFicha(){
     </div>
     ${avisoArvore ? `<div class="aviso">${esc(avisoArvore)}</div>` : ''}
     <div class="ajuda" style="margin-bottom:5px">Clique na seta para abrir o ramo; clique no nome para escolher o assunto.</div>
-    <div class="arvore" id="arvoreBox">${renderArvore()}</div>
+    <div class="arvore" id="arvoreBox" data-rolagem="arvore">${renderArvore()}</div>
 
     <h3 class="blo">Regime</h3>
     ${campoRegime()}
@@ -1073,7 +1080,7 @@ function renderFicha(){
     </div>
     <div class="campo" style="margin-bottom:8px">
       <label>Sugeridas — ocorrem no texto</label>
-      <div style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px">
+      <div data-rolagem="sugeridas" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px">
         ${sug.length ? sug.slice(0,40).map(s => `
           <div class="termo">
             <input type="checkbox" ${selPalavras.includes(s.termo)?'checked':''}
@@ -1095,7 +1102,7 @@ function renderFicha(){
              oninput="if(!compondo(event)) buscarPalavra(this.value)" autocomplete="off">
       <div class="ajuda">Para termos corretos que a norma não escreve com essas palavras — a sugestão automática nunca os encontra.</div>
       ${buscaPalavra.length >= 2 ? `
-        <div style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
+        <div data-rolagem="buscaPalavra" style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
           ${resultadosBusca().length ? resultadosBusca().slice(0,30).map(r => `
             <div class="termo">
               <input type="checkbox" ${selPalavras.includes(r.termo)?'checked':''}
@@ -1153,7 +1160,7 @@ function renderFicha(){
       <input type="text" id="buscaNorma" value="${esc(buscaLegis)}" placeholder="digite parte do título ou o número"
              oninput="if(!compondo(event)) buscarNorma(this.value)" autocomplete="off">
       ${buscaLegis.length >= 3 ? `
-        <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
+        <div data-rolagem="buscaLegis" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
           ${resultadosNorma().length ? resultadosNorma().slice(0,25).map(d => `
             <div class="termo" style="cursor:pointer${d.suspeito?';opacity:.62':''}" onclick="addLegis(${arg(d.id)})">
               <span style="flex:1">${esc(d.titulo)}</span>
@@ -1199,6 +1206,24 @@ function renderFicha(){
    a seção fechava a cada clique, no meio do preenchimento.
    O aviso não abre a seção; aparece como marca no cabeçalho. */
 function alternarSecao(id, aberta){ secoesAbertas[id] = aberta; }
+
+/* Chamada ANTES de reescrever a ficha. Lê a posição de cada caixa marcada com
+   data-rolagem e devolve depois, num microtask: ele corre quando o render síncrono já
+   terminou e antes de o navegador pintar, então a lista não pisca no topo.
+   O `descartarRolagem` existe para a norma nova não herdar a rolagem da anterior — a
+   árvore é a mesma taxonomia, e restaurar ali abriria a ficha nova no meio da lista. */
+function preservarRolagem(){
+  if (descartarRolagem) { descartarRolagem = false; return; }
+  const antes = {};
+  document.querySelectorAll('#ficha [data-rolagem]')
+          .forEach(e => { antes[e.dataset.rolagem] = e.scrollTop; });
+  queueMicrotask(() => {
+    document.querySelectorAll('#ficha [data-rolagem]').forEach(e => {
+      const v = antes[e.dataset.rolagem];
+      if (v) e.scrollTop = v;
+    });
+  });
+}
 
 /* Barras automáticas em dd/mm/aaaa. Insere separador e nada mais: não reordena, não
    completa dígito e não impede apagar — quem digita continua no comando. Quem cola a
