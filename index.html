@@ -192,10 +192,11 @@ table.fila tr.trecho:hover td { background:transparent; }
 <main>
   <div id="gate" class="gate">
     <h2>Quem é você?</h2>
-    <p>Sem senha. O nome fica registrado em cada revisão e o sistema impede que a mesma pessoa atue em dois estágios do mesmo documento.</p>
+    <p>Escolha o seu nome na lista. O nome fica registrado em cada revisão, e o sistema
+       impede que a mesma pessoa atue em dois estágios do mesmo documento.</p>
     <div id="perfis"></div>
-    <input id="novoNome" type="text" placeholder="ou digite seu nome para criar">
-    <button onclick="criarPerfil()">Entrar</button>
+    <p class="ajuda" style="margin-top:14px">Não está na lista? Peça à equipe do Memória SPU
+       para incluir o seu nome.</p>
     <div id="gateMsg" style="font-size:13px;margin-top:10px"></div>
   </div>
 
@@ -385,6 +386,14 @@ const MASCARA = /(secretaria do patrim[oô]nio da uni[aã]o|minist[eé]rio da ge
 function norm(s){ return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function escRx(s){ return (s||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+/* O trecho vem do ts_headline, que insere <b> em volta do que casou — e é por isso que
+   ele não pode ser simplesmente escapado: o realce se perderia. Mas o ts_headline NÃO é
+   sanitizador: <svg/onload=…> e <b onmouseover=…> atravessam inteiros, e a fonte é
+   documentos.texto, que aceita escrita anônima. Testado em 25/08, sete variantes.
+   Então: escapa tudo, e devolve só o par <b></b>. */
+function realceSeguro(s){
+  return esc(s).replace(/&lt;b&gt;/g, '<b>').replace(/&lt;\/b&gt;/g, '</b>');
+}
 
 /* ---------- entrada ---------- */
 async function iniciar(){
@@ -395,14 +404,12 @@ async function iniciar(){
   const salvo = localStorage.getItem('indexador_perfil');
   if (salvo) { const p = (perfis||[]).find(x => x.id === salvo); if (p) entrar(p.id, p.nome_exibicao); }
 }
-async function criarPerfil(){
-  const nome = document.getElementById('novoNome').value.trim();
-  if (!nome) return;
-  const { data, error } = await sb.from('perfis').insert({ nome_exibicao: nome }).select().single();
-  if (error) { document.getElementById('gateMsg').textContent = 'Erro: ' + error.message; return; }
-  perfisPorId[data.id] = data.nome_exibicao;   // senão o recém-criado aparece como não identificado
-  entrar(data.id, data.nome_exibicao);
-}
+/* Criar perfil digitando o nome saiu em 26/08. A lista passou a ser fechada: quem indexa
+   escolhe entre os nomes cadastrados, e incluir alguém é ato de quem administra.
+   Dois motivos, e o segundo é o que pesa. Primeiro, a identidade deixava de significar
+   qualquer coisa se cada um pudesse inventar a sua. Segundo, o nome digitado ia parar
+   dentro de um manipulador `onclick` — e é essa a falha que o plano 003 conserta.
+   A escrita anônima em `perfis` continua aberta no banco; fechá-la é o plano 000. */
 async function entrar(id, nome){
   usuario = { id, nome };
   localStorage.setItem('indexador_perfil', id);
@@ -571,7 +578,7 @@ async function carregarFila(){
       <td>${quem.length ? esc(quem.join(' · ')) : '<span style="color:var(--muted)">—</span>'}</td>
       <td><button class="b sec" onclick="abrir('${d.id}')">abrir</button></td></tr>
       ${d.trecho ? `<tr class="trecho"><td colspan="7">
-        <span class="onde">${esc(d.onde||'')}</span> ${d.trecho}</td></tr>` : ''}`;
+        <span class="onde">${esc(d.onde||'')}</span> ${realceSeguro(d.trecho)}</td></tr>` : ''}`;
     }).join('')}
     </tbody></table>` : `<div class="vazio">${busca ? 'Nenhuma norma casa com essa busca.' : 'Nada nesta fila.'}</div>`;
 }
