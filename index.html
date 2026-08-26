@@ -386,6 +386,16 @@ const MASCARA = /(secretaria do patrim[oô]nio da uni[aã]o|minist[eé]rio da ge
 function norm(s){ return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function escRx(s){ return (s||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+/* Dado dentro de manipulador inline passa por aqui, sempre.
+
+   Não escreva as aspas à mão: um onclick que interpola f('${esc(x)}') dentro de aspas
+   simples é vulnerável, e acrescentar a aspa simples ao esc() NÃO conserta — o navegador
+   decodifica &#39; de volta para ' antes de o JavaScript ser analisado, e a string fecha
+   igual. Testado em 25/08.
+
+   JSON.stringify escreve o literal completo, com aspas duplas e escapes; esc() transforma
+   essas aspas em &quot;, que o navegador devolve como " ao montar o JS. */
+function arg(v){ return esc(JSON.stringify(v === undefined ? null : v)); }
 /* O trecho vem do ts_headline, que insere <b> em volta do que casou — e é por isso que
    ele não pode ser simplesmente escapado: o realce se perderia. Mas o ts_headline NÃO é
    sanitizador: <svg/onload=…> e <b onmouseover=…> atravessam inteiros, e a fonte é
@@ -400,7 +410,7 @@ async function iniciar(){
   const { data: perfis } = await sb.from('perfis').select('id,nome_exibicao').order('nome_exibicao');
   (perfis||[]).forEach(p => perfisPorId[p.id] = p.nome_exibicao);
   document.getElementById('perfis').innerHTML = (perfis||[]).map(p =>
-    `<button class="perfil-btn" onclick="entrar('${p.id}','${esc(p.nome_exibicao)}')">${esc(p.nome_exibicao)}</button>`).join('');
+    `<button class="perfil-btn" onclick="entrar(${arg(p.id)}, ${arg(p.nome_exibicao)})">${esc(p.nome_exibicao)}</button>`).join('');
   const salvo = localStorage.getItem('indexador_perfil');
   if (salvo) { const p = (perfis||[]).find(x => x.id === salvo); if (p) entrar(p.id, p.nome_exibicao); }
 }
@@ -568,7 +578,7 @@ async function carregarFila(){
       const e = est[d.status] || ['fim', d.status];
       const quem = creditos(etapasPorDoc[d.id]);
       return `<tr>
-      <td><a onclick="abrir('${d.id}')">${esc(d.titulo)}</a>
+      <td><a onclick="abrir(${arg(d.id)})">${esc(d.titulo)}</a>
           ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}
           ${travaViva(d) ? '<span class="pill esp1" title="reservada por você ao abrir; expira em '
             + horasTrava() + 'h">com você desde ' + horaCurta(d.em_andamento_desde) + '</span>' : ''}</td>
@@ -576,7 +586,7 @@ async function carregarFila(){
       <td><span class="pill ${e[0]}">${e[1]}</span></td>
       <td>${d.tem_texto ? 'integral' : '<span style="color:var(--bad)">sem texto</span>'}</td>
       <td>${quem.length ? esc(quem.join(' · ')) : '<span style="color:var(--muted)">—</span>'}</td>
-      <td><button class="b sec" onclick="abrir('${d.id}')">abrir</button></td></tr>
+      <td><button class="b sec" onclick="abrir(${arg(d.id)})">abrir</button></td></tr>
       ${d.trecho ? `<tr class="trecho"><td colspan="7">
         <span class="onde">${esc(d.onde||'')}</span> ${realceSeguro(d.trecho)}</td></tr>` : ''}`;
     }).join('')}
@@ -907,33 +917,33 @@ function blocoCadastro(){
       return `<div class="campo cadastro">
         <label>${c.r}</label>
         <div class="valor-atual">${atual ? esc(atual) : vazio}</div>
-        <button class="b sec mini" onclick="proporCorrecao('${c.k}')">propor correção</button>
+        <button class="b sec mini" onclick="proporCorrecao(${arg(c.k)})">propor correção</button>
       </div>`;
     }
 
     let entrada;
     if (c.area) {
-      entrada = `<textarea rows="3" oninput="setProposta('${c.k}',this.value)"
+      entrada = `<textarea rows="3" oninput="setProposta(${arg(c.k)},this.value)"
                    placeholder="valor proposto">${esc(p.valor)}</textarea>`;
     } else if (c.lista) {
       const opcoes = (c.lista === 'tipos'
         ? [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean))].sort()
         : orgaos);
       entrada = `<input type="text" list="lista_${c.k}" value="${esc(p.valor)}"
-                   oninput="setProposta('${c.k}',this.value)" placeholder="valor proposto">
+                   oninput="setProposta(${arg(c.k)},this.value)" placeholder="valor proposto">
                  <datalist id="lista_${c.k}">${opcoes.map(o => `<option value="${esc(o)}">`).join('')}</datalist>`;
     } else {
       // campo de data leva a máscara; os demais recebem o valor cru
       const ent = /dd\/mm/.test(c.dica || '') ? 'mascaraData(this)' : 'this.value';
       entrada = `<input type="text" value="${esc(p.valor)}" placeholder="${esc(c.dica || 'valor proposto')}"
-                   oninput="setProposta('${c.k}', ${ent})">`;
+                   oninput="setProposta(${arg(c.k)}, ${ent})">`;
     }
 
     return `<div class="campo cadastro proposto">
       <label>${c.r}</label>
       <div class="valor-atual riscado">${atual ? esc(atual) : vazio}</div>
       ${entrada}
-      <button class="b sec mini" onclick="desfazerProposta('${c.k}')">desfazer</button>
+      <button class="b sec mini" onclick="desfazerProposta(${arg(c.k)})">desfazer</button>
     </div>`;
   }).join('');
 
@@ -987,7 +997,7 @@ function renderFicha(){
       <label>Selecionados — máximo ${limiteAssuntos()}</label>
       <div>${selAssuntos.length ? selAssuntos.map(id => `
         <span class="chip">${esc(porId[id] ? porId[id].caminho.split('>>').pop() : id)}
-        <button onclick="tirarAssunto('${id}')">×</button></span>`).join('')
+        <button onclick="tirarAssunto(${arg(id)})">×</button></span>`).join('')
         : '<span class="vazio">nenhum — registre apenas o nível mais profundo</span>'}</div>
       ${cheioA ? '<div class="ajuda" style="color:var(--bad)">Limite atingido. Retire um para escolher outro.</div>' : ''}
       <div class="ajuda">Escolha o nível que corresponde ao que a norma trata — qualquer um serve, não precisa descer até a folha. Os ancestrais do que você escolher ficam implícitos e não são registrados.</div>
@@ -1003,7 +1013,7 @@ function renderFicha(){
     <div class="campo">
       <label>Selecionadas — máximo ${limitePalavras()}</label>
       <div>${selPalavras.length ? selPalavras.map(t => `
-        <span class="chip">${esc(t)}<button onclick="tirarPalavra('${esc(t).replace(/'/g,"\\'")}')">×</button></span>`).join('')
+        <span class="chip">${esc(t)}<button onclick="tirarPalavra(${arg(t)})">×</button></span>`).join('')
         : '<span class="vazio">nenhuma</span>'}</div>
       ${cheioP ? '<div class="ajuda" style="color:var(--bad)">Limite atingido.</div>' : ''}
     </div>
@@ -1014,11 +1024,11 @@ function renderFicha(){
           <div class="termo">
             <input type="checkbox" ${selPalavras.includes(s.termo)?'checked':''}
                    ${(!selPalavras.includes(s.termo) && cheioP)?'disabled':''}
-                   onchange="alternarPalavra('${esc(s.termo).replace(/'/g,"\\'")}')">
+                   onchange="alternarPalavra(${arg(s.termo)})">
             <span style="flex:1;cursor:pointer" title="clique para ver no texto"
-                  onclick="irParaOcorrencia('${esc(s.termo).replace(/'/g,"\\'")}')">${esc(s.termo)}</span>
+                  onclick="irParaOcorrencia(${arg(s.termo)})">${esc(s.termo)}</span>
             <button class="lupa" title="próxima ocorrência no texto"
-                    onclick="irParaOcorrencia('${esc(s.termo).replace(/'/g,"\\'")}')">⌖</button>
+                    onclick="irParaOcorrencia(${arg(s.termo)})">⌖</button>
             <span class="badge ${s.cabeca?'em':''}">${s.cabeca?'ementa/Art. 1º':'só no corpo'}</span>
             <span class="cnt">×${s.n}</span>
           </div>`).join('') : '<div class="vazio">Nenhum termo da taxonomia ocorre neste texto.</div>'}
@@ -1036,7 +1046,7 @@ function renderFicha(){
             <div class="termo">
               <input type="checkbox" ${selPalavras.includes(r.termo)?'checked':''}
                      ${(!selPalavras.includes(r.termo) && cheioP)?'disabled':''}
-                     onchange="alternarPalavra('${esc(r.termo).replace(/'/g,"\\'")}')">
+                     onchange="alternarPalavra(${arg(r.termo)})">
               <span style="flex:1">${esc(r.termo)}</span>
               <span class="cnt">${esc(r.categoria||'')}</span>
             </div>`).join('')
@@ -1047,7 +1057,7 @@ function renderFicha(){
         </div>` : ''}
       ${propostasNovas.length ? `<div class="ajuda" style="margin-top:6px">
         Propostos como novos: ${propostasNovas.map(p => `<span class="chip cheio">${esc(p)}
-        <button onclick="tirarProposta('${esc(p).replace(/'/g,"\\'")}')">×</button></span>`).join('')}</div>` : ''}
+        <button onclick="tirarProposta(${arg(p)})">×</button></span>`).join('')}</div>` : ''}
     </div>
 
     <h3 class="blo">Situação e vigência</h3>
@@ -1060,11 +1070,11 @@ function renderFicha(){
       </select></div>
     <div class="campo"><label>Início de vigência</label>
       <input type="text" placeholder="dd/mm/aaaa" value="${esc(campos.data_inicio_vigencia||'')}"
-             oninput="setCampo('data_inicio_vigencia', mascaraData(this)); criticarData(this)">
+             oninput="setCampo(${arg("data_inicio_vigencia")}, mascaraData(this)); criticarData(this)">
       ${criticaData(campos.data_inicio_vigencia)}</div>
     <div class="campo"><label>Revogado em</label>
       <input type="text" placeholder="dd/mm/aaaa" value="${esc(campos.revogado_em||'')}"
-             oninput="setCampo('revogado_em', mascaraData(this)); criticarData(this)">
+             oninput="setCampo(${arg("revogado_em")}, mascaraData(this)); criticarData(this)">
       ${criticaData(campos.revogado_em)}</div>
 
     <h3 class="blo">Relações entre normas</h3>
@@ -1077,7 +1087,7 @@ function renderFicha(){
         ${legisTudo().length ? legisTudo().map(x => `
           <span class="chip ${x.item_id?'':'cheio'}" title="${x.item_id?('item '+x.item_id):'sem cadastro no Tainacan — não vira link'}">
             ${esc(x.titulo)}${x.item_id?` <span class="cnt">#${x.item_id}</span>`:' ⚠'}
-            ${x.manual?`<button onclick="tirarLegis('${x.doc_id}')">×</button>`:''}
+            ${x.manual?`<button onclick="tirarLegis(${arg(x.doc_id)})">×</button>`:''}
           </span>`).join('')
           : '<span class="vazio">Confirme as relações acima ou busque abaixo.</span>'}
       </div>
@@ -1091,7 +1101,7 @@ function renderFicha(){
       ${buscaLegis.length >= 3 ? `
         <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
           ${resultadosNorma().length ? resultadosNorma().slice(0,25).map(d => `
-            <div class="termo" style="cursor:pointer${d.suspeito?';opacity:.62':''}" onclick="addLegis('${d.id}')">
+            <div class="termo" style="cursor:pointer${d.suspeito?';opacity:.62':''}" onclick="addLegis(${arg(d.id)})">
               <span style="flex:1">${esc(d.titulo)}</span>
               ${d.suspeito ? '<span class="badge" style="background:var(--bad-bg);color:var(--bad)">registro sem documento</span>' : ''}
               <span class="cnt">${d.item_id_tainacan ? '#'+d.item_id_tainacan : 'sem id'}</span>
@@ -1101,7 +1111,7 @@ function renderFicha(){
     </div>
 
     <div class="campo"><label>Observações</label>
-      <textarea rows="2" oninput="setCampo('observacoes',this.value)">${esc(campos.observacoes||'')}</textarea></div>
+      <textarea rows="2" oninput="setCampo(${arg("observacoes")},this.value)">${esc(campos.observacoes||'')}</textarea></div>
 
     <div class="campo">
       <label><input type="checkbox" ${docAtual.em_duvida?'checked':''} onchange="setDuvida(this.checked)">
@@ -1122,8 +1132,8 @@ function renderFicha(){
 
     <div class="rodape-acoes">
       <button class="b sec" onclick="voltar()">cancelar</button>
-      <button class="b sec" onclick="salvar('rascunho')">salvar rascunho</button>
-      <button class="b" onclick="salvar('concluir')">concluir revisão</button>
+      <button class="b sec" onclick="salvar(${arg("rascunho")})">salvar rascunho</button>
+      <button class="b" onclick="salvar(${arg("concluir")})">concluir revisão</button>
     </div>`;
 }
 
@@ -1193,7 +1203,7 @@ function compondo(ev){ return !!(ev && (ev.isComposing || ev.keyCode === 229)); 
 
 function secao(id, rotulo, marca, conteudo){
   return `<details class="secao" id="sec_${id}" ${secoesAbertas[id] ? 'open' : ''}
-      ontoggle="alternarSecao('${id}', this.open)">
+      ontoggle="alternarSecao(${arg(id)}, this.open)">
     <summary>${esc(rotulo)}
       ${marca ? `<span class="secao-marca${marca.grave ? '' : ' ok'}">${esc(marca.texto)}</span>` : ''}</summary>
     <div class="conteudo">${conteudo}</div>
@@ -1293,7 +1303,7 @@ function renderTriagem(){
         <b>Indício de matéria patrimonial.</b> O texto usa ${ex.length} expressão${ex.length>1?'ões':''}
         do vocabulário de patrimônio da União. Clique para ver no texto:<br>
         ${ex.slice(0,12).map(x => `<button class="b sec" style="padding:2px 9px;margin:5px 5px 0 0;font-weight:${x.cabeca?'700':'500'}"
-            onclick="irParaOcorrencia('${esc(x.termo).replace(/'/g,"\\'")}')"
+            onclick="irParaOcorrencia(${arg(x.termo)})"
             title="${x.cabeca?'aparece na ementa ou no Art. 1º':'aparece no corpo'}">${esc(x.termo)} ×${x.n}${x.cabeca?' ◆':''}</button>`).join('')}
         ${ex.length>12?`<br><span style="font-size:11.5px">e mais ${ex.length-12}</span>`:''}
         <div style="font-size:11.5px;margin-top:7px">◆ marca as que aparecem na ementa ou no Art. 1º —
@@ -1308,7 +1318,7 @@ function renderTriagem(){
       <div class="campo"><label>Motivo da recusa</label>
         <input type="text" id="motivoRec" value="${esc(campos.motivo_recusa||'')}"
                placeholder="ex.: trata de diárias e passagens"
-               oninput="setCampo('motivo_recusa', this.value)"></div>
+               oninput="setCampo(${arg("motivo_recusa")}, this.value)"></div>
       <div class="aviso">Ao salvar, a norma segue para conferência já marcada como
         <b>recusada por não ser patrimonial</b>. Assunto e palavras-chave não são preenchidos.</div>
       <!-- O cadastro aparece mesmo na norma recusada: título errado é erro de registro
@@ -1317,7 +1327,7 @@ function renderTriagem(){
       ${blocoCadastro()}
       <div class="rodape-acoes">
         <button class="b sec" onclick="voltar()">cancelar</button>
-        <button class="b" onclick="salvar('concluir')">salvar recusa e avançar</button>
+        <button class="b" onclick="salvar(${arg("concluir")})">salvar recusa e avançar</button>
       </div>` : ''}`;
 }
 function blocoTriagem(){
@@ -1338,10 +1348,10 @@ function renderArvore(){
     const sel = selAssuntos.includes(n.id);
     const temFilho = arvore.some(f => f.pai_id === n.id);
     const seta = temFilho
-      ? `<span class="seta" onclick="event.stopPropagation();alternarNo('${n.id}')">${expandidos.has(n.id)?'▾':'▸'}</span>`
+      ? `<span class="seta" onclick="event.stopPropagation();alternarNo(${arg(n.id)})">${expandidos.has(n.id)?'▾':'▸'}</span>`
       : '<span class="seta vazia"></span>';
     return `<div class="no ${n.folha?'folha':''} ${sel?'sel':''}" style="padding-left:${6 + (n.nivel-1)*16}px"
-      onclick="selecionarNo('${n.id}')" title="${esc((n.definicao||'').slice(0,300))}">
+      onclick="selecionarNo(${arg(n.id)})" title="${esc((n.definicao||'').slice(0,300))}">
       ${seta}<span class="cod">${esc(n.codigo_tt)}</span><span>${esc(n.termo)}</span>
     </div>`;
   }).join('');
@@ -1463,7 +1473,7 @@ function campoRegime(){
     const atual = campos.regime_destinacao || '';
     const r = regimes.find(x => x.termo === atual);
     html += `<div class="campo"><label>Regime de destinação — TT-02</label>
-      <select onchange="setCampo('regime_destinacao',this.value); renderFicha()">
+      <select onchange="setCampo(${arg("regime_destinacao")},this.value); renderFicha()">
         <option value="">—</option>
         ${regimes.map(x => `<option value="${esc(x.termo)}" ${atual===x.termo?'selected':''}>
           ${'  '.repeat(Math.max(0,x.nivel-1))}${esc(x.codigo_tt)} · ${esc(x.termo)}</option>`).join('')}
@@ -1476,7 +1486,7 @@ function campoRegime(){
     const at = campos.regime_aquisicao || '';
     const r2 = regAquis.find(x => x.termo === at);
     html += `<div class="campo"><label>Regime de aquisição</label>
-      <select onchange="setCampo('regime_aquisicao',this.value); renderFicha()">
+      <select onchange="setCampo(${arg("regime_aquisicao")},this.value); renderFicha()">
         <option value="">—</option>
         ${regAquis.map(x => `<option value="${esc(x.termo)}" ${at===x.termo?'selected':''}>
           ${'  '.repeat(Math.max(0,x.nivel-1))}${esc(x.codigo_tt)} · ${esc(x.termo)}</option>`).join('')}
@@ -1511,8 +1521,8 @@ function renderRel(r){
   return `<div class="rel ${r.confianca < 0.7 ? 'ocr':''}">
     <div class="cab"><span class="tp">${esc(rotulo)}</span>
       <span class="acoes">
-        <button class="sim ${d==='confirmada'?'on':''}" onclick="decidirRel('${r.id}','confirmada')">confirma</button>
-        <button class="nao ${d==='rejeitada'?'on':''}" onclick="decidirRel('${r.id}','rejeitada')">não</button>
+        <button class="sim ${d==='confirmada'?'on':''}" onclick="decidirRel(${arg(r.id)}, ${arg("confirmada")})">confirma</button>
+        <button class="nao ${d==='rejeitada'?'on':''}" onclick="decidirRel(${arg(r.id)}, ${arg("rejeitada")})">não</button>
       </span></div>
     <div>${frase} <b>${esc(outro||'(referência não resolvida)')}</b>${disp}${link}</div>
     <div class="ev">“${esc((r.evidencia||'').slice(0,240))}”</div>
