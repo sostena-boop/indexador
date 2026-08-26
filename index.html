@@ -371,9 +371,12 @@ function horaCurta(iso){
 // travada por outro e voltar tire a reserva dessa pessoa.
 async function soltarTrava(id){
   if (!id) return;
-  await sb.from('documentos')
+  const resp = await sb.from('documentos')
     .update({ em_andamento_por: null, em_andamento_desde: null })
-    .eq('id', id).eq('em_andamento_por', usuario.id);
+    .eq('id', id).eq('em_andamento_por', usuario.id).select('id');
+  // sem exigirLinhas: soltar a trava de uma norma que já não é minha (expirou, ou nunca
+  // foi minha) devolve zero linhas legitimamente — não é falha
+  gravou(resp, 'a liberação da reserva');
 }
 // Nome de órgão não é conteúdo da norma: sem esta máscara, "Patrimônio" e "União" batem
 // em praticamente todo documento por causa do cabeçalho institucional.
@@ -578,10 +581,15 @@ async function abrir(id){
   // Reivindicação ATÔMICA: o `.or()` vai junto do update, então quem chegar primeiro leva.
   // Ler-e-depois-gravar deixaria a janela em que dois clientes leem "livre" e ambos gravam.
   // `select('id')` devolve as linhas afetadas: vazio = a norma é de outra pessoa.
-  const { data: pego } = await sb.from('documentos')
+  // Sem exigirLinhas aqui: zero linhas não é por si só falha — pode ser a norma legitimamente
+  // reservada por outra pessoa. Por isso o resultado é examinado à mão logo abaixo, em vez de
+  // confiar só no booleano de gravou(). Falha de rede diferente de "outra pessoa está com a
+  // norma" evita a mensagem falsa que `const { data: pego } = …` (sem capturar `error`) dava.
+  const respReserva = await sb.from('documentos')
     .update({ em_andamento_por: usuario.id, em_andamento_desde: new Date().toISOString() })
     .eq('id', id).or(filtroTrava()).select('id');
-  const eraDeOutro = !(pego && pego.length);
+  const reservou = gravou(respReserva, 'a reserva desta norma');
+  const eraDeOutro = reservou && !(respReserva.data && respReserva.data.length);
 
   const { data: d } = await sb.from('documentos').select('*').eq('id', id).single();
   docAtual = d;
@@ -1423,9 +1431,15 @@ function setCampo(k,v){ campos[k] = v; }
 // de contradição com o grafo. Por isso re-renderiza — é <select>, então não há foco a perder.
 function setSituacao(v){ campos.situacao_norma = v; renderFicha(); }
 async function setDuvida(v){
+  const anterior = docAtual.em_duvida;
   docAtual.em_duvida = v;
-  await sb.from('documentos').update({ em_duvida:v, duvida_por: usuario.id, duvida_em: new Date().toISOString() })
-    .eq('id', docAtual.id);
+  const resp = await sb.from('documentos')
+    .update({ em_duvida:v, duvida_por: usuario.id, duvida_em: new Date().toISOString() })
+    .eq('id', docAtual.id).select('id');
+  if (!gravou(resp, 'a marcação de dúvida', { exigirLinhas: true })) {
+    docAtual.em_duvida = anterior;   // desfaz na tela: o clique pareceu funcionar e não gravou
+    renderFicha();
+  }
 }
 
 /* Campos condicionais, pela posição na árvore e não pelo nome do assunto:
@@ -1677,27 +1691,43 @@ async function salvar(modo){
   });
   if (error) { alert(explicarErroDeEtapa(error)); return; }
 
+  const relacoesQueFalharam = [];
   for (const r of relAtual) {
-    if (decisoesRel[r.id]) {
-      await sb.from('relacoes_norma').update({
-        status: decisoesRel[r.id], confirmado_por: usuario.id, confirmado_em: new Date().toISOString()
-      }).eq('id', r.id);
-    }
+    if (!decisoesRel[r.id]) continue;
+    const resp = await sb.from('relacoes_norma').update({
+      status: decisoesRel[r.id], confirmado_por: usuario.id, confirmado_em: new Date().toISOString()
+    }).eq('id', r.id).select('id');
+    // sem alerta por relação: numa norma com dez relações seriam dez caixas seguidas
+    if (resp.error || !(resp.data || []).length) relacoesQueFalharam.push(r.id);
+  }
+  if (relacoesQueFalharam.length) {
+    alert('A revisão foi gravada, mas ' + relacoesQueFalharam.length +
+          ' confirmação(ões) de relação não. Reabra a norma e confira as relações.');
   }
   // termos fora da taxonomia viram proposta formal, para a curadoria decidir
   for (const p of propostasNovas) {
-    await sb.from('propostas_regra').insert({
+    const resp = await sb.from('propostas_regra').insert({
       colecao_id: colecaoId, usuario_id: usuario.id,
       titulo: 'Termo novo: ' + p,
       descricao: 'Proposto durante a indexação de "' + docAtual.titulo + '". Não consta do vocabulário.'
     });
+    if (!gravou(resp, 'a proposta do termo "' + p + '"')) return;
   }
   if (!await gravarPropostas()) return;
-  await gravarCompilacao();
-  await sb.from('documentos').update({ rascunho: null, rascunho_por: null, rascunho_em: null })
-    .eq('id', docAtual.id);
-  temRascunho = false;   // concluiu: o rascunho deixou de existir e não segura mais nada
-  await soltarTrava(docAtual.id);     // gravou: a reserva não tem mais razão de existir
+  if (!await gravarCompilacao()) return;
+
+  /* A limpeza do rascunho vem ANTES de dar a revisão por concluída, e é conferida.
+     Motivo: `abrir()` dá precedência ao rascunho sobre a etapa — se a limpeza falhasse
+     em silêncio, a etapa ficaria gravada, o rascunho continuaria lá, e a próxima
+     abertura mostraria o rascunho POR CIMA da revisão concluída. Regressão sem
+     mensagem de erro em ponto nenhum. */
+  const limpou = await sb.from('documentos')
+    .update({ rascunho: null, rascunho_por: null, rascunho_em: null })
+    .eq('id', docAtual.id).select('id');
+  if (!gravou(limpou, 'o encerramento do rascunho', { exigirLinhas: true })) return;
+  temRascunho = false;
+
+  await soltarTrava(docAtual.id);
   voltar();
 }
 
@@ -1714,14 +1744,42 @@ function explicarErroDeEtapa(error){
   return 'Erro ao salvar: ' + m;
 }
 
+/* Toda escrita no banco passa por aqui. Existe por dois motivos concretos:
+
+   1. O supabase-js NÃO lança exceção — devolve { data, error }. Ignorar o `error` é
+      ignorar em silêncio, e é o que 9 das 15 escritas faziam.
+   2. O PostgREST devolve 204 para UPDATE e DELETE bloqueados pela RLS: sem erro, sem
+      linha afetada. Por isso `exigirLinhas`: quando a gravação PRECISA ter mudado algo,
+      não basta a ausência de erro, é preciso ter voltado linha.
+
+   Devolve true quando gravou. Quem chama decide o que fazer com false — mas ninguém
+   pode seguir como se tivesse gravado. */
+function gravou(resposta, oQue, { exigirLinhas = false } = {}) {
+  const { data, error } = resposta || {};
+  if (error) {
+    alert('Não consegui gravar ' + oQue + '.\n\n' + error.message +
+          '\n\nO que você preencheu continua na tela. Tente de novo; ' +
+          'se repetir, avise a equipe do Memória SPU.');
+    return false;
+  }
+  if (exigirLinhas && Array.isArray(data) && data.length === 0) {
+    alert('A gravação de ' + oQue + ' não teve efeito — nenhuma linha foi alterada.\n\n' +
+          'Isso costuma ser permissão do banco, ou a norma ter sido alterada por outra ' +
+          'pessoa enquanto você trabalhava. Recarregue a página e confira antes de refazer.');
+    return false;
+  }
+  return true;
+}
+
 async function gravarCompilacao(){
-  if (precisaCompilar === null) return;
-  await sb.from('documentos').update({
+  if (precisaCompilar === null) return true;
+  const resp = await sb.from('documentos').update({
     precisa_compilar: precisaCompilar,
     compilada: precisaCompilar === true ? (compilada === true) : null,
     compilacao_por: usuario.id,
     compilacao_em: new Date().toISOString()
-  }).eq('id', docAtual.id);
+  }).eq('id', docAtual.id).select('id');
+  return gravou(resp, 'a resposta sobre compilação', { exigirLinhas: true });
 }
 
 async function salvarRascunho(){
@@ -1744,10 +1802,14 @@ async function salvarRascunho(){
   await gravarCompilacao();
   await gravarPropostas();
 
-  const { data: renovou } = await sb.from('documentos')
+  const respRenova = await sb.from('documentos')
     .update({ em_andamento_por: usuario.id, em_andamento_desde: agora })
     .eq('id', docAtual.id).or(filtroTrava()).select('id');
-  const minha = !!(renovou && renovou.length);
+  // sem alerta: o rascunho JÁ foi salvo, e o texto genérico de `gravou()` diria à pessoa
+  // que nada foi gravado e que tentasse de novo. A reserva é informação de rodapé.
+  const confirmou = !respRenova.error;
+  const minha = confirmou && !!(respRenova.data && respRenova.data.length);
+  const naoDeuPraSaber = !confirmou;   // terceiro estado: nem "minha" nem "de outro" — não sei
 
   temRascunho = true;
   baseFicha = instantaneoFicha();   // o que foi salvo deixa de contar como alteração pendente
@@ -1755,10 +1817,14 @@ async function salvarRascunho(){
   if (r) {
     const m = document.createElement('span');
     m.className = 'ajuda';
-    m.style.cssText = 'margin-left:12px;color:var(--' + (minha ? 'ok' : 'bad') + ')';
-    m.textContent = 'rascunho salvo ' + new Date().toLocaleTimeString('pt-BR').slice(0, 5) +
-      (minha ? ' — a norma segue reservada para você por mais 4 horas'
-             : ' — atenção: a norma está reservada por outra pessoa');
+    const cor = minha ? 'ok' : (naoDeuPraSaber ? 'warn' : 'bad');
+    m.style.cssText = 'margin-left:12px;color:var(--' + cor + ')';
+    const status = minha
+      ? ' — a norma segue reservada para você por mais 4 horas'
+      : naoDeuPraSaber
+        ? ' — não consegui confirmar de quem é a reserva; tente de novo'
+        : ' — atenção: a norma está reservada por outra pessoa';
+    m.textContent = 'rascunho salvo ' + new Date().toLocaleTimeString('pt-BR').slice(0, 5) + status;
     r.querySelectorAll('.ajuda').forEach(x => x.remove());
     r.appendChild(m);
   }
@@ -1793,10 +1859,13 @@ async function inserirNorma(){
     diagnostico_extracao: texto ? 'limpo' : 'sem_documento_fonte'
   }).select().single();
   if (error) { msg.textContent = 'Erro: ' + error.message; return; }
-  await sb.from('itens_sem_cadastro').insert({
+  const respSemCadastro = await sb.from('itens_sem_cadastro').insert({
     titulo, origem: 'indexador',
     observacao: 'Inserida pelo Indexador por ' + usuario.nome + '. Pendente de cadastro no Tainacan.'
   });
+  // não trava a abertura da norma por isto: o documento já foi criado com sucesso acima,
+  // e o registro de "sem cadastro" é apoio para a equipe do repositório, não pré-requisito
+  gravou(respSemCadastro, 'o registro da norma sem cadastro');
   msg.textContent = '';
   document.getElementById('novaNorma').classList.add('hidden');
   abrir(data.id);
