@@ -210,11 +210,14 @@ table.fila tr.trecho:hover td { background:transparent; }
       <div class="card">
         <h2 class="sec">Fila de revisão</h2>
         <div class="barra">
+          <!-- "A indexar" é a primeira e por isso a padrão: quem entra, entra para indexar.
+               "Todas" fica no fim, como saída para quem quer o panorama — a ordem das
+               opções segue o caminho da norma, e o panorama não é etapa dele. -->
           <select id="fEstagio" onchange="carregarFila()">
-            <option value="todas">Todas — em qualquer estágio</option>
             <option value="aguardando_esp1">A indexar — ninguém pegou ainda</option>
             <option value="aguardando_esp2">A conferir — já indexadas por um especialista</option>
             <option value="concluido">Prontas — conferidas pelos dois</option>
+            <option value="todas">Todas — em qualquer estágio</option>
           </select>
           <input type="text" id="fTitulo" placeholder="buscar no título, número ou texto da norma" style="width:290px"
                  oninput="if(!compondo(event)) buscaAtrasada()" autocomplete="off">
