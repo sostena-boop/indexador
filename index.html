@@ -621,7 +621,7 @@ async function carregarFila(){
     return ordem === 'antiga' ? x - y : y - x;
   };
 
-  let linhas = [], count = 0;
+  let linhas = [], count = 0, comOutraPessoa = 0;
   if (busca.length >= 3) {
     // busca por título, número, ementa E texto integral, com trecho do achado.
     // O estágio deixa de filtrar: quem procura uma norma quer achá-la em qualquer fila.
@@ -649,6 +649,23 @@ async function carregarFila(){
     const r = await q;
     linhas = r.data || [];
     count = r.count || 0;
+
+    /* Quantas o filtro de reserva escondeu.
+       Sem isto os números da tela não fecham, e foi assim que o problema apareceu: com
+       uma norma reservada por outra pessoa, "Todas" contava 118 e a soma dos estágios
+       dava 117. Quem olha conclui que o sistema perdeu uma norma — e conclui certo, do
+       ponto de vista dele, porque nada na tela dizia onde ela estava.
+       Esconder da LISTA continua certo: é o que evita duas pessoas na mesma norma. O que
+       não pode é o número mentir. Consulta separada, só contagem (head), sem trazer linha. */
+    if (st !== 'todas') {
+      let qt = sb.from('documentos')
+        .select('id', { count:'exact', head:true })
+        .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st);
+      if (haGateDeLote()) qt = qt.in('lote', lotesLiberados());
+      if (tipo) qt = qt.eq('tipo_norma', tipo);
+      const rt = await qt;
+      comOutraPessoa = Math.max(0, (rt.count || 0) - count);
+    }
   }
   // Quem já passou por cada norma da página — uma consulta só, pelos ids exibidos.
   // Fica fora da consulta da fila de propósito: a fila vem de `buscar_normas` na busca e
@@ -665,6 +682,11 @@ async function carregarFila(){
                 concluido:['fim','pronta'], duplicado_excluir:['fim','duplicada'] };
   document.getElementById('filaInfo').innerHTML =
     esc((busca ? `${linhas.length} encontrados` : `${linhas.length} exibidos`) + ` de ${count||0}`) +
+    (comOutraPessoa
+      ? ` · <span class="cnt" title="reservadas por outra pessoa, ou com rascunho dela — aparecem em Todas">`
+        + esc(comOutraPessoa + (comOutraPessoa === 1 ? ' com outra pessoa' : ' com outras pessoas'))
+        + '</span>'
+      : '') +
     (haGateDeLote()
       ? ` · <b>lote ${esc(lotesLiberados().join(', '))}</b>` +
         (busca ? ' <span class="cnt">a busca alcança toda a coleção</span>' : '')
