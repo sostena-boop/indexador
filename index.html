@@ -211,6 +211,7 @@ table.fila tr.trecho:hover td { background:transparent; }
         <h2 class="sec">Fila de revisão</h2>
         <div class="barra">
           <select id="fEstagio" onchange="carregarFila()">
+            <option value="todas">Todas — em qualquer estágio</option>
             <option value="aguardando_esp1">A indexar — ninguém pegou ainda</option>
             <option value="aguardando_esp2">A conferir — já indexadas por um especialista</option>
             <option value="concluido">Prontas — conferidas pelos dois</option>
@@ -592,10 +593,14 @@ async function carregarFila(){
     count = linhas.length;
   } else {
     let q = sb.from('documentos')
-      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,texto,numero_norma,em_andamento_por,em_andamento_desde,lote', { count:'exact' })
-      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st)
-      .or(filtroTrava())   // some da fila de quem não pegou; reaparece quando a reserva expira
+      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,numero_norma,em_andamento_por,em_andamento_desde,lote', { count:'exact' })
+      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false)
       .limit(120);
+    /* "Todas" é panorama, não fila de trabalho: mostra qualquer estágio e não esconde o
+       que está reservado por outra pessoa — esconder seria justamente perder a visão que
+       se foi buscar ali. Nos estágios, a reserva continua sumindo da fila de quem não
+       pegou, que é o que evita duas pessoas na mesma norma no mutirão. */
+    if (st !== 'todas') q = q.eq('status', st).or(filtroTrava());
     // a fila mostra só o lote liberado; a busca por texto continua alcançando tudo
     if (haGateDeLote()) q = q.in('lote', lotesLiberados());
     if (ordem === 'fila') q = q.order('ordem_fila', { ascending: true });
@@ -603,7 +608,7 @@ async function carregarFila(){
                .order('titulo', { ascending: true });
     if (tipo) q = q.eq('tipo_norma', tipo);
     const r = await q;
-    linhas = (r.data || []).map(d => ({ ...d, tem_texto: !!d.texto }));
+    linhas = r.data || [];
     count = r.count || 0;
   }
   // Quem já passou por cada norma da página — uma consulta só, pelos ids exibidos.
@@ -626,7 +631,7 @@ async function carregarFila(){
         (busca ? ' <span class="cnt">a busca alcança toda a coleção</span>' : '')
       : '');
   document.getElementById('filaBox').innerHTML = linhas.length ? `
-    <table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Situação</th><th>Texto</th><th>Quem revisou</th><th></th></tr></thead><tbody>
+    <table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Situação</th><th>Quem revisou</th><th></th></tr></thead><tbody>
     ${linhas.map(d => {
       const e = est[d.status] || ['fim', d.status];
       const quem = creditos(etapasPorDoc[d.id]);
@@ -637,7 +642,6 @@ async function carregarFila(){
             + horasTrava() + 'h">com você desde ' + horaCurta(d.em_andamento_desde) + '</span>' : ''}</td>
       <td>${esc(d.tipo_norma||'—')}</td><td>${d.ano_publicacao||'—'}</td>
       <td><span class="pill ${e[0]}">${e[1]}</span></td>
-      <td>${d.tem_texto ? 'integral' : '<span style="color:var(--bad)">sem texto</span>'}</td>
       <td>${quem.length ? esc(quem.join(' · ')) : '<span style="color:var(--muted)">—</span>'}</td>
       <td><button class="b sec" onclick="abrir(${arg(d.id)})">abrir</button></td></tr>
       ${d.trecho ? `<tr class="trecho"><td colspan="7">
