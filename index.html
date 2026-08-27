@@ -350,7 +350,8 @@ function creditos(etapas){
    Enquanto alguém está com a norma, ela some da fila dos outros — é o que evita duas
    pessoas indexarem o mesmo item num mutirão.
 
-   A trava TEM QUE EXPIRAR. Uma versão anterior implementou a reserva sem expiração e
+   A trava SEM RASCUNHO tem que expirar (com rascunho, não expira mais — ver
+   `filtroTrava`). Uma versão anterior implementou a reserva sem expiração e
    deixou 19 normas travadas entre 16 e 28 de julho, presas a quem abriu e nunca voltou.
    Prazo em `colecoes.config.horas_trava`, para ajustar sem republicar. */
 /* ---------- controle por lote ----------
@@ -790,7 +791,9 @@ async function abrir(id){
     `<span class="pill ${e.estagio}">${esc(ESTAGIO[e.estagio] || e.estagio)}: ` +
     `${esc(nomeDe(e.usuario_id))} · ${dataCurta(e.criado_em)}</span>`).join(' ');
   const avisoTrava = travaDeOutro
-    ? ` <span class="pill duv" title="A reserva expira sozinha em ${horasTrava()}h">` +
+    ? ` <span class="pill duv" title="${travaDeOutro.rascunho_por
+          ? 'Tem rascunho salvo: a reserva não expira sozinha'
+          : 'A reserva expira sozinha em ' + horasTrava() + 'h'}">` +
       `${esc(nomeDe(travaDeOutro.em_andamento_por))} está com esta norma desde ` +
       `${horaCurta(travaDeOutro.em_andamento_desde)} — evite trabalhar em paralelo</span>` : '';
   document.getElementById('docAcoes').innerHTML =
@@ -1735,10 +1738,20 @@ function melhorDoGrupo(a, b){
   return String(a.id) < String(b.id) ? a : b;   // desempate estável
 }
 
+/* "2398" tem de achar "Decreto-lei nº 2.398". Quem procura digita o número como lembra,
+   e a fonte escreve como quer: a mesma coleção tem `nº 2.398`, `nº 11423` e `nº 1.298`.
+   Cobrar o ponto de milhar do lado de quem busca é cobrar que adivinhe a grafia. */
+function semMilhar(t){ return (t || '').replace(/(\d)[.\s](?=\d{3}\b)/g, '$1'); }
+
 function resultadosNorma(){
   const q = norm(buscaLegis.trim());
   if (q.length < 3) return [];
-  const achados = acervo.filter(d => d.id !== docAtual.id && norm(d.titulo).includes(q));
+  const qn = semMilhar(q);
+  const achados = acervo.filter(d => {
+    if (d.id === docAtual.id) return false;
+    const t = norm(d.titulo);
+    return t.includes(q) || semMilhar(t).includes(qn);
+  });
   const porNorma = new Map();
   achados.forEach(d => {
     const k = identidadeNorma(d);
@@ -1985,10 +1998,10 @@ async function salvarRascunho(){
     return;
   }
   const agora = new Date().toISOString();
-  // A reserva é RENOVADA aqui, não presumida. Quem salva rascunho está trabalhando, e a
-  // janela de 4 horas tem de recomeçar — senão a norma com trabalho dentro cai para outra
-  // pessoa enquanto quem começou espera acesso ao SharePoint. E renovar tem de ser
-  // reivindicação, não afirmação: se a norma já for de outro, a mensagem não pode mentir.
+  // A reserva é RENOVADA aqui, não presumida. Desde 27/08 o rascunho segura a reserva sem
+  // prazo, então renovar é menos crítico do que era — mas continua importando, porque é
+  // isto que registra QUEM está com a norma. E renovar tem de ser reivindicação, não
+  // afirmação: se a norma já for de outro, a mensagem não pode mentir.
   const { error } = await sb.from('documentos').update({
     rascunho: { patrimonial, campos, assuntos: selAssuntos, palavras: selPalavras,
                 decisoesRel, legisManuais, propostasNovas },
@@ -2017,7 +2030,7 @@ async function salvarRascunho(){
     const cor = minha ? 'ok' : (naoDeuPraSaber ? 'warn' : 'bad');
     m.style.cssText = 'margin-left:12px;color:var(--' + cor + ')';
     const status = minha
-      ? ' — a norma segue reservada para você por mais 4 horas'
+      ? ' — a norma fica reservada para você enquanto o rascunho existir'
       : naoDeuPraSaber
         ? ' — não consegui confirmar de quem é a reserva; tente de novo'
         : ' — atenção: a norma está reservada por outra pessoa';
