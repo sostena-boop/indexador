@@ -369,15 +369,31 @@ function loteLiberado(d){
   return lotesLiberados().includes(String(d && d.lote || ''));
 }
 
-/* Sem `web=1` o SharePoint entrega o .docx como arquivo e o navegador BAIXA. Com ele,
-   redireciona para _layouts/15/Doc.aspx — o Word online, que abre na aba. Só 19 dos 118
-   links do lote 1 traziam o parâmetro; os outros 99 baixavam.
-   Feito aqui e não nos dados de propósito: vale para o lote que vier, seja qual for o
-   link que a equipe escrever, e não depende de ninguém lembrar da regra ao montar a
-   planilha. */
+/* Faz o link do .docx ABRIR no navegador em vez de baixar.
+
+   Apontar para o caminho do arquivo entrega o .docx e o navegador salva. A primeira
+   tentativa foi acrescentar `?web=1`, e ela NÃO resolveu: o SharePoint redireciona para
+   `Doc.aspx?...&action=default`, e `default` respeita a preferência do tenant — que aqui
+   é abrir no aplicativo, ou seja, baixar. Medido em 27/08: com `web=1` a URL final tem
+   `action=default`; montando `Doc.aspx` com `action=view`, o `view` sobrevive ao
+   redirecionamento e o visualizador web abre.
+
+   Feito na ferramenta e não nos dados: vale para o lote que vier, seja qual for o link
+   que a equipe escrever, e não depende de ninguém lembrar da regra ao montar a planilha. */
 function paraVisualizador(u){
-  if (!u || /[?&]web=1(&|$)/i.test(u)) return u;
-  return u + (u.includes('?') ? '&' : '?') + 'web=1';
+  if (!u) return u;
+  let x;
+  try { x = new URL(u); } catch (e) { return u; }
+  // já é um link de visualizador: só garante que a ação seja `view`, não `default`
+  if (/\/_layouts\//i.test(x.pathname)) {
+    x.searchParams.set('action', 'view');
+    return x.toString();
+  }
+  const partes = x.pathname.split('/').filter(Boolean);
+  if (partes[0] !== 'sites' || partes.length < 3) return u;   // fora do padrão: não mexe
+  const site = x.origin + '/' + partes[0] + '/' + partes[1];
+  const caminho = decodeURIComponent(x.pathname);
+  return site + '/_layouts/15/Doc.aspx?sourcedoc=' + encodeURIComponent(caminho) + '&action=view';
 }
 
 function horasTrava(){ return Number(config.horas_trava) || 4; }
