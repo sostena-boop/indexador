@@ -369,14 +369,33 @@ function loteLiberado(d){
   return lotesLiberados().includes(String(d && d.lote || ''));
 }
 
+/* Sem `web=1` o SharePoint entrega o .docx como arquivo e o navegador BAIXA. Com ele,
+   redireciona para _layouts/15/Doc.aspx — o Word online, que abre na aba. Só 19 dos 118
+   links do lote 1 traziam o parâmetro; os outros 99 baixavam.
+   Feito aqui e não nos dados de propósito: vale para o lote que vier, seja qual for o
+   link que a equipe escrever, e não depende de ninguém lembrar da regra ao montar a
+   planilha. */
+function paraVisualizador(u){
+  if (!u || /[?&]web=1(&|$)/i.test(u)) return u;
+  return u + (u.includes('?') ? '&' : '?') + 'web=1';
+}
+
 function horasTrava(){ return Number(config.horas_trava) || 4; }
 function corteTrava(){ return new Date(Date.now() - horasTrava()*3600e3).toISOString(); }
-// visível para mim = livre, ou expirada, ou minha
+/* Visível para mim = livre, ou expirada SEM rascunho dentro, ou minha.
+   O `rascunho_por.is.null` na cláusula do meio é a decisão do Juarez de 27/08: rascunho
+   salvo é salvo, e a reserva que o guarda não expira mais sozinha. Ele conhece o custo —
+   norma com rascunho de alguém que não voltar fica presa até alguém soltar à mão — e
+   assumiu, porque perder trabalho digitado é pior que uma norma parada.
+   A trava sem rascunho continua expirando em `horas_trava`: aquela some por descuido de
+   quem só abriu e foi embora, e é para isso que o prazo existe. */
 function filtroTrava(){
-  return `em_andamento_por.is.null,em_andamento_desde.lt.${corteTrava()},em_andamento_por.eq.${usuario.id}`;
+  return `em_andamento_por.is.null,and(em_andamento_desde.lt.${corteTrava()},rascunho_por.is.null),em_andamento_por.eq.${usuario.id}`;
 }
 function travaViva(d){
-  return d.em_andamento_por && d.em_andamento_desde && d.em_andamento_desde > corteTrava();
+  if (!d.em_andamento_por) return false;
+  if (d.rascunho_por) return true;      // rascunho segura a reserva, sem prazo
+  return !!d.em_andamento_desde && d.em_andamento_desde > corteTrava();
 }
 function horaCurta(iso){
   const d = new Date(iso);
@@ -596,7 +615,7 @@ async function carregarFila(){
     count = linhas.length;
   } else {
     let q = sb.from('documentos')
-      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,numero_norma,em_andamento_por,em_andamento_desde,lote', { count:'exact' })
+      .select('id,titulo,tipo_norma,ano_publicacao,status,em_duvida,numero_norma,em_andamento_por,em_andamento_desde,rascunho_por,lote', { count:'exact' })
       .eq('colecao_id', colecaoId).eq('fora_de_escopo', false)
       .limit(120);
     /* "Todas" é panorama, não fila de trabalho: mostra qualquer estágio e não esconde o
@@ -641,8 +660,11 @@ async function carregarFila(){
       return `<tr>
       <td><a onclick="abrir(${arg(d.id)})">${esc(d.titulo)}</a>
           ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}
-          ${travaViva(d) ? '<span class="pill esp1" title="reservada por você ao abrir; expira em '
-            + horasTrava() + 'h">com você desde ' + horaCurta(d.em_andamento_desde) + '</span>' : ''}</td>
+          ${travaViva(d) ? '<span class="pill esp1" title="' + (d.rascunho_por
+              ? 'tem rascunho salvo — a reserva não expira'
+              : 'reservada por você ao abrir; expira em ' + horasTrava() + 'h')
+            + '">' + (d.rascunho_por ? 'rascunho seu desde ' : 'com você desde ')
+            + horaCurta(d.em_andamento_desde) + '</span>' : ''}</td>
       <td>${esc(d.tipo_norma||'—')}</td><td>${d.ano_publicacao||'—'}</td>
       <td><span class="pill ${e[0]}">${e[1]}</span></td>
       <td>${quem.length ? esc(quem.join(' · ')) : '<span style="color:var(--muted)">—</span>'}</td>
@@ -681,6 +703,11 @@ async function abrir(id){
   precisaCompilar = d.precisa_compilar; compilada = d.compilada; linkDocx = null;
   temRascunho = !!(d.rascunho && typeof d.rascunho === 'object');
   secoesAbertas = {};   // norma nova começa com as três recolhidas
+  /* ...e com a árvore de assuntos recolhida. Sem isto ela abria no ramo da norma
+     ANTERIOR: quem indexava uma de caracterização e passava para uma de destinação
+     encontrava a árvore aberta em caracterização, sugerindo um caminho que não é o
+     desta norma. Estado de navegação da ficha passada não é pista, é ruído. */
+  expandidos = new Set();
   descartarRolagem = true;   // ...e do topo de cada lista, não onde a norma anterior parou
 
   // data_assinatura ainda não existe em `documentos` — o valor atual vem da planilha
@@ -690,7 +717,7 @@ async function abrir(id){
     linhaPlanilha = (ps && ps[0]) || null;
     // só vale como link o que é URL: em 80 das 118 a coluna trazia apenas o nome do arquivo
     const lw = (linhaPlanilha && linhaPlanilha.link_arquivo_word) || '';
-    linkDocx = /^https?:\/\//i.test(lw) ? lw : null;
+    linkDocx = /^https?:\/\//i.test(lw) ? paraVisualizador(lw) : null;
   }
   // propostas já registradas para esta norma, valendo a mais recente de cada campo
   const { data: prop } = await sb.from('v_propostas_cadastro_vigentes')
@@ -1639,13 +1666,73 @@ function legisTudo(){
   });
   return out;
 }
+/* Uma norma, uma linha.
+
+   O acervo guarda o mesmo ato várias vezes: o Decreto-Lei 2.398 aparecia QUATRO vezes na
+   busca — dois títulos legítimos, diferindo em `nº` contra `n.º` e numa vírgula, e dois
+   atalhos `.url` cadastrados como se fossem a norma. Quem relaciona precisa escolher A
+   norma, não adivinhar qual dos quatro registros é o bom.
+
+   O agrupamento NÃO usa `tipo_norma`: no caso real o registro de melhor título trazia
+   "Decreto" e os outros três "Decreto-Lei", então agrupar pelo campo separaria justamente
+   o que se quer juntar. O tipo sai do próprio título, primeira palavra — assim
+   "Portaria SPU/MGI nº X" e "Portaria nº X" caem no mesmo grupo. O preço é que
+   "Portaria Conjunta" e "Portaria" também caem, o que só importaria se as duas tivessem
+   mesmo número E mesma data.
+
+   Sem número não há agrupamento: cada registro fica por si. Preferível a fundir normas
+   diferentes — perder uma opção da lista é pior que mostrar uma linha a mais. */
+const MESES_TIT = { janeiro:'01', fevereiro:'02', marco:'03', abril:'04', maio:'05',
+  junho:'06', julho:'07', agosto:'08', setembro:'09', outubro:'10', novembro:'11', dezembro:'12' };
+
+function identidadeNorma(d){
+  const t = norm(d.titulo || '');
+  const num = String(d.numero_norma || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (!num) return 'sozinho|' + d.id;
+  const m = t.match(/de\s+(\d{1,2})\s+de\s+([a-z]+)\s+de\s+(\d{4})/);
+  const data = (m && MESES_TIT[m[2]])
+    ? ('0' + m[1]).slice(-2) + MESES_TIT[m[2]] + m[3]
+    : String(d.ano_publicacao || '');
+  const tipo = (t.split(/\s+/)[0] || '').replace(/[^a-z]/g, '');
+  return tipo + '|' + num + '|' + data;
+}
+
+/* Quão perto do padrão "Tipo SIGLA nº N, de D de MÊS de AAAA" o título está.
+   Nome de arquivo é desclassificado, não apenas penalizado: `.url` e `.pdf` no fim
+   significam que cadastraram o atalho no lugar da norma. */
+function notaTitulo(d){
+  const t = d.titulo || '', tn = norm(t);
+  let n = 0;
+  if (/\.(url|pdf|docx?|html?)\s*$/i.test(t)) n -= 100;
+  if (/\bn[\u00ba\u00b0o]\s*\d/i.test(t) && !/\bn\s*\.\s*[\u00ba\u00b0o]/i.test(t)) n += 3;
+  if (/\d[\d.]*\s*,\s*de\s+\d{1,2}\s+de\s+/i.test(tn)) n += 3;
+  if (/de\s+\d{1,2}\s+de\s+[a-z]+\s+de\s+\d{4}/.test(tn)) n += 2;
+  if (t.includes('_')) n -= 2;
+  if (/[A-Z]/.test(t) && t === t.toUpperCase()) n -= 1;
+  return n;
+}
+
+function melhorDoGrupo(a, b){
+  const na = notaTitulo(a), nb = notaTitulo(b);
+  if (na !== nb) return na > nb ? a : b;
+  if (!!a.suspeito !== !!b.suspeito) return a.suspeito ? b : a;
+  return String(a.id) < String(b.id) ? a : b;   // desempate estável
+}
+
 function resultadosNorma(){
   const q = norm(buscaLegis.trim());
   if (q.length < 3) return [];
-  return acervo.filter(d => d.id !== docAtual.id && norm(d.titulo).includes(q))
-               .sort((a,b) => (a.suspeito - b.suspeito) ||
-                              ((b.ano_publicacao||0) - (a.ano_publicacao||0)))
-               .slice(0, 40);
+  const achados = acervo.filter(d => d.id !== docAtual.id && norm(d.titulo).includes(q));
+  const porNorma = new Map();
+  achados.forEach(d => {
+    const k = identidadeNorma(d);
+    const atual = porNorma.get(k);
+    porNorma.set(k, atual ? melhorDoGrupo(atual, d) : d);
+  });
+  return [...porNorma.values()]
+    .sort((a,b) => (a.suspeito - b.suspeito) ||
+                   ((b.ano_publicacao||0) - (a.ano_publicacao||0)))
+    .slice(0, 40);
 }
 function buscarNorma(v){
   buscaLegis = v;
