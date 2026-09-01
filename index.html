@@ -220,8 +220,7 @@ select.tp:hover { border-color:var(--terra); }
                opções segue o caminho da norma, e o panorama não é etapa dele. -->
           <select id="fEstagio" onchange="carregarFila()">
             <option value="aguardando_esp1">A indexar — ninguém pegou ainda</option>
-            <option value="aguardando_esp2">A conferir — já indexadas por um especialista</option>
-            <option value="concluido">Prontas — conferidas pelos dois</option>
+            <option value="indexado">Indexadas — trabalho concluído</option>
             <option value="todas">Todas — em qualquer estágio</option>
           </select>
           <input type="text" id="fTitulo" placeholder="buscar no título, número ou texto da norma" style="width:290px"
@@ -348,17 +347,21 @@ const CAMPOS_CADASTRO = [
 ];
 
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
+/* Rótulos do fluxo antigo, de dois estágios. Mantidos só para as etapas já gravadas com
+   esses valores continuarem legíveis — desde 01/09/2026 grava-se sempre `esp1` e a tela
+   não fala mais em "Especialista 1 e 2". */
 const ESTAGIO = { cogec:'COGEC', esp1:'Especialista 1', esp2:'Especialista 2' };
 function nomeDe(uid){ return perfisPorId[uid] || 'autor não identificado'; }
 function dataCurta(iso){
   const d = new Date(iso);
   return isNaN(d) ? '' : d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit' });
 }
-// "Coimbra (Especialista 1)" — quem fez, em que papel. Ordenado por data, mais antigo antes,
-// que é a ordem em que a norma passou pelas mãos das pessoas.
+/* "Coimbra" na primeira gravação, "Coimbra (correção)" nas seguintes. Ordenado por data,
+   mais antigo antes. Com um estágio só, dizer o estágio não informa nada; o que a fila
+   precisa mostrar é quem indexou e se alguém corrigiu depois. */
 function creditos(etapas){
   return (etapas||[]).slice().sort((a,b) => a.criado_em < b.criado_em ? -1 : 1)
-    .map(e => `${nomeDe(e.usuario_id)} (${ESTAGIO[e.estagio] || e.estagio})`);
+    .map((e, i) => nomeDe(e.usuario_id) + (i === 0 ? '' : ' (correção)'));
 }
 
 /* ---------- trava de fila ----------
@@ -567,7 +570,7 @@ async function carregarBase(){
   regAquis = (regs||[]).filter(r => r.origem === 'tt_aquisicao').sort(ord);   // aquisição, provisória
 
   const { data: pcs } = await sb.from('taxonomia')
-    .select('id,termo,categoria,no_assunto_id,regra_matching')
+    .select('id,termo,categoria,no_assunto_id,regra_matching,provisoria')
     .eq('colecao_id', colecaoId).eq('tipo','palavra_chave').eq('ativo', true);
   palavras = (pcs||[]).map(t => ({...t, n: norm(t.termo)})).filter(t => t.n.length >= 3);
 
@@ -693,8 +696,12 @@ async function carregarFila(){
     (eps||[]).forEach(e => (etapasPorDoc[e.documento_id] = etapasPorDoc[e.documento_id] || []).push(e));
   }
 
-  const est = { aguardando_esp1:['esp1','a indexar'], aguardando_esp2:['esp2','a conferir'],
-                concluido:['fim','pronta'], duplicado_excluir:['fim','duplicada'] };
+  const est = { aguardando_esp1:['esp1','a indexar'], indexado:['fim','indexada'],
+                duplicado_excluir:['fim','duplicada'],
+                // do fluxo de dois estágios, encerrado em 01/09/2026: nenhum documento
+                // deveria ter estes status, mas rótulo que some deixa a tela ilegível
+                // se sobrar algum
+                aguardando_esp2:['esp2','a conferir'], concluido:['fim','indexada'] };
   document.getElementById('filaInfo').innerHTML =
     esc((busca ? `${linhas.length} encontrados` : `${linhas.length} exibidos`) + ` de ${count||0}`) +
     (comOutraPessoa
@@ -749,7 +756,11 @@ async function abrir(id){
   // Não bloqueia a leitura: sem autenticação de verdade, impedir seria pior que avisar —
   // e a pessoa pode legitimamente precisar consultar a norma que o colega está indexando.
   travaDeOutro = eraDeOutro && travaViva(d) && d.em_andamento_por !== usuario.id ? d : null;
-  estagioAtual = d.status === 'aguardando_esp2' ? 'esp2' : 'esp1';
+  /* Um estágio só, desde 01/09/2026. Grava-se sempre `esp1` — não porque exista um
+     "especialista 1", mas porque a coluna já tem esse valor em 10 etapas e trocá-lo por
+     um nome novo obrigaria a reescrever histórico para ganhar nada. O rótulo na tela é
+     que mudou. */
+  estagioAtual = 'esp1';
   selAssuntos = []; selPalavras = []; decisoesRel = {}; tiposRel = {}; campos = {};
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
   legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
@@ -824,11 +835,16 @@ async function abrir(id){
     .in('tipo', ['altera','revoga_parcialmente']);
   const { count: nDisp } = await sb.from('dispositivos')
     .select('id', { count:'exact', head:true }).eq('documento_id', id);
-  // quem já passou por esta norma, com data — o estágio diz o papel, isto diz a pessoa
+  /* Quem já passou por esta norma, com data. Com um estágio só, o rótulo "Especialista 1"
+     não informa nada — o que importa é QUEM e QUANDO. Quando há mais de uma gravação, as
+     posteriores são correções, e a tela precisa dizer isso: sem essa marca, a última
+     gravação parece a única e o trabalho de quem indexou primeiro some da vista sem ter
+     saído do banco. */
   const jaFizeram = (ants || []).slice().sort((a,b) => a.criado_em < b.criado_em ? -1 : 1);
-  const credito = jaFizeram.map(e =>
-    `<span class="pill ${e.estagio}">${esc(ESTAGIO[e.estagio] || e.estagio)}: ` +
-    `${esc(nomeDe(e.usuario_id))} · ${dataCurta(e.criado_em)}</span>`).join(' ');
+  const jaIndexada = jaFizeram.length > 0;
+  const credito = jaFizeram.map((e, i) =>
+    `<span class="pill ${i === 0 ? 'esp1' : 'esp2'}" title="${i === 0 ? 'indexação' : 'correção posterior'}">` +
+    `${i === 0 ? 'indexou' : 'corrigiu'}: ${esc(nomeDe(e.usuario_id))} · ${dataCurta(e.criado_em)}</span>`).join(' ');
   const avisoTrava = travaDeOutro
     ? ` <span class="pill duv" title="${travaDeOutro.rascunho_por
           ? 'Tem rascunho salvo: a reserva não expira sozinha'
@@ -836,7 +852,9 @@ async function abrir(id){
       `${esc(nomeDe(travaDeOutro.em_andamento_por))} está com esta norma desde ` +
       `${horaCurta(travaDeOutro.em_andamento_desde)} — evite trabalhar em paralelo</span>` : '';
   document.getElementById('docAcoes').innerHTML =
-    `<span class="pill ${estagioAtual}">Você aqui: ${{esp1:'Especialista 1',esp2:'Especialista 2'}[estagioAtual]}</span>` +
+    (jaIndexada
+      ? `<span class="pill duv" title="gravar de novo registra uma correção, e a indexação anterior continua no histórico">já indexada — você está corrigindo</span>`
+      : `<span class="pill esp1">a indexar</span>`) +
     (credito ? ' ' + credito : '') +
     avisoTrava +
     (d.fonte === 'ocr' ? ' <span class="pill duv">texto de OCR — conferir números</span>' : '') +
@@ -937,7 +955,8 @@ function sugerirPalavras(){
     const todas = (limpo.match(rx) || []).length;
     if (!todas) return;
     const naCabeca = (cab.match(rx) || []).length > 0;
-    out.push({ termo: p.termo, n: todas, cabeca: naCabeca, no: p.no_assunto_id, cat: p.categoria });
+    out.push({ termo: p.termo, n: todas, cabeca: naCabeca, no: p.no_assunto_id,
+               cat: p.categoria, provisoria: !!p.provisoria });
   });
   // ementa/Art. 1º primeiro: é onde está o objeto da norma, não a mera menção
   out.sort((a,b) => (b.cabeca - a.cabeca) || (b.n - a.n) || a.termo.localeCompare(b.termo));
@@ -1135,7 +1154,14 @@ function renderFicha(){
 
   // A indexação é montada à parte para não aninhar template dentro de template —
   // o miolo já tem crase em vários pontos e a legibilidade não sobreviveria.
-  const miolo = `
+  /* Retificação não recebe assunto nem palavra-chave. Decisão do Juarez, 01/09/2026: o
+     ato não tem objeto próprio — ele corrige a forma ou o conteúdo de outro. Atribuir
+     assunto a ele faria a retificação disputar a busca por assunto com a norma que ela
+     corrige, que é quem de fato trata da matéria.
+     O que a liga ao acervo é a relação `retifica`, e por isso ela virou obrigatória: sem
+     assunto, sem palavra-chave e sem relação, a retificação ficaria órfã — existiria,
+     seria achável pelo número, e não se conectaria a nada. */
+  const tematico = `
     <h3 class="blo" style="margin-top:0">Assunto</h3>
     <div class="campo">
       <label>Selecionados — máximo ${limiteAssuntos()}</label>
@@ -1173,6 +1199,7 @@ function renderFicha(){
                   onclick="irParaOcorrencia(${arg(s.termo)})">${esc(s.termo)}</span>
             <button class="lupa" title="próxima ocorrência no texto"
                     onclick="irParaOcorrencia(${arg(s.termo)})">⌖</button>
+            ${s.provisoria ? '<span class="badge" title="proposto por quem indexou outra norma; ainda não passou pela curadoria e não integra o vocabulário oficial">da equipe</span>' : ''}
             <span class="badge ${s.cabeca?'em':''}">${s.cabeca?'ementa/Art. 1º':'só no corpo'}</span>
             <span class="cnt">×${s.n}</span>
           </div>`).join('') : '<div class="vazio">Nenhum termo da taxonomia ocorre neste texto.</div>'}
@@ -1204,6 +1231,15 @@ function renderFicha(){
         <button onclick="tirarProposta(${arg(p)})">×</button></span>`).join('')}</div>` : ''}
     </div>
 
+`;
+  const avisoRetificacao = `
+    <h3 class="blo" style="margin-top:0">Assunto e palavras-chave</h3>
+    <div class="aviso">Retificação não recebe assunto nem palavra-chave. Este ato não tem
+      objeto próprio — ele corrige outra norma, e é ela que trata da matéria.
+      <br><br><b>O que esta ficha precisa</b> é a relação com a norma retificada, logo
+      abaixo em <i>Relações entre normas</i>. Sem ela a retificação não se liga a nada.</div>`;
+
+  const miolo = (ehRetificacao() ? avisoRetificacao : tematico) + `
     <h3 class="blo">Situação e vigência</h3>
     ${avisoSituacao()}
     ${avisoRevogadoEm()}
@@ -1700,6 +1736,9 @@ function renderRel(r){
     <div class="ev">“${esc((r.evidencia||'').slice(0,240))}”</div>
   </div>`;
 }
+function ehRetificacao(){
+  return !!docAtual && (docAtual.tipo_norma || '').toLowerCase().startsWith('retifica');
+}
 function decidirRel(id, v){ decisoesRel[id] = decisoesRel[id] === v ? undefined : v; renderFicha(); }
 /* O tipo que vale: o corrigido por quem revisa, ou o que o extrator sugeriu. */
 function tipoDe(r){ return tiposRel[r.id] || r.tipo; }
@@ -1896,7 +1935,23 @@ async function salvar(modo){
     voltar(); return;
   }
 
-  if (!selAssuntos.length) { if (!confirm('Nenhum assunto selecionado. Salvar assim mesmo?')) return; }
+  if (ehRetificacao()) {
+    /* A relação com a norma retificada é o ÚNICO vínculo que a retificação tem, agora que
+       ela não recebe assunto nem palavra-chave. Por isso é bloqueio e não pergunta: uma
+       retificação gravada sem ela fica órfã no acervo, e órfã não se descobre — some em
+       silêncio, e ninguém vai auditar o que não aparece em lugar nenhum. */
+    const temRetifica = relAtual.some(r => tipoDe(r) === 'retifica' &&
+                                            decisoesRel[r.id] === 'confirmada');
+    if (!temRetifica) {
+      alert('Falta dizer qual norma esta retificação corrige.\n\n' +
+            'Confirme a relação do tipo "retifica" em Relações entre normas. ' +
+            'Como a retificação não recebe assunto nem palavra-chave, essa relação é o ' +
+            'único vínculo dela com o acervo — sem ela, a norma fica solta.');
+      return;
+    }
+  } else if (!selAssuntos.length) {
+    if (!confirm('Nenhum assunto selecionado. Salvar assim mesmo?')) return;
+  }
 
   const confirmadas = relAtual.filter(r => decisoesRel[r.id] === 'confirmada');
   const relacionadas = legisTudo();
@@ -1910,6 +1965,13 @@ async function salvar(modo){
       .map(r => docsPorId[qualPonta(r)])
       .filter(d => d && d.item_id_tainacan)
       .map(d => String(d.item_id_tainacan)))].join('||');
+
+  /* Retificação grava assunto e palavra-chave VAZIOS, mesmo que um rascunho antigo ou
+     uma etapa anterior tenham trazido algo: a regra é do ato, não da sessão. Sem esta
+     linha, reabrir uma retificação indexada antes de 01/09/2026 regravaria o que a regra
+     nova proíbe, e o bloqueio da tela não teria alcançado — ele impede digitar, não
+     impede o que já estava no estado. */
+  if (ehRetificacao()) { selAssuntos = []; selPalavras = []; }
 
   const fichaFinal = Object.assign({}, campos, {
     assuntos: selAssuntos,
@@ -1979,6 +2041,29 @@ async function salvar(modo){
     alert('A revisão foi gravada, mas ' + relacoesQueFalharam.length +
           ' confirmação(ões) de relação não. Reabra a norma e confira as relações.');
   }
+  /* O termo proposto entra na taxonomia como PROVISÓRIO e passa a ser sugerido nas
+     próximas normas — mas só quando bater no texto delas, pela mesma regra dos demais.
+     Sugerir todo termo já proposto a toda norma transformaria a lista num varal, e a
+     lista já tem 9,4% de aceite: somar ruído a ela pioraria o que a equipe reclama.
+
+     `provisoria` é o que separa "reutilizável" de "oficial". As taxonomias de assunto e
+     regime são instituídas por Resolução do COMGC; vocabulário instituído por norma não
+     se altera por formulário. A curadoria promove, ou não.
+
+     Duplicata é conferida contra o vocabulário já carregado, sem acento e sem caixa. Não
+     é garantia — duas pessoas podem propor ao mesmo tempo — mas evita o caso comum. */
+  for (const t of propostasNovas) {
+    if (palavras.some(x => x.n === norm(t))) continue;
+    await sb.from('taxonomia').insert({
+      colecao_id: colecaoId, tipo: 'palavra_chave', termo: t.trim(),
+      provisoria: true, ativo: true, origem: 'proposto_pela_equipe',
+      regra_matching: 'frase', parametros_matching: {},
+      nota_curadoria: 'Proposto por ' + (usuario.nome || usuario.id) +
+        ' ao indexar "' + (docAtual.titulo || '').slice(0, 90) + '" em ' +
+        new Date().toLocaleDateString('pt-BR') + '. Aguarda curadoria.'
+    });
+  }
+
   // termos fora da taxonomia viram proposta formal, para a curadoria decidir
   for (const p of propostasNovas) {
     const resp = await sb.from('propostas_regra').insert({
@@ -2011,11 +2096,9 @@ async function salvar(modo){
    novo. Aqui ela é explicada, e o resto continua sendo erro de verdade. */
 function explicarErroDeEtapa(error){
   const m = (error && error.message) || '';
-  if (/j[áa] atuou em outro est[áa]gio/i.test(m)) {
-    return 'Você já trabalhou nesta norma em outro estágio, e a conferência é feita por ' +
-           'outra pessoa — são dois pares de olhos.\n\nNada se perdeu: use "salvar rascunho" ' +
-           'se quiser guardar o que fez, e passe a norma a um colega para a conferência.';
-  }
+  /* A mensagem dos "dois pares de olhos" saiu com o gatilho, em 01/09/2026. Ela dizia
+     para passar a norma a um colega, o que agora seria instrução errada: qualquer
+     indexador pode corrigir qualquer norma, inclusive a própria. */
   return 'Erro ao salvar: ' + m;
 }
 
