@@ -164,6 +164,11 @@ table.fila tr.trecho:hover td { background:transparent; }
 .rel { border:1px solid var(--line); border-radius:10px; padding:11px 13px; margin-bottom:9px; background:#fff; font-size:13px; }
 .rel .cab { display:flex; justify-content:space-between; gap:10px; align-items:baseline; margin-bottom:5px; }
 .rel .tp { font-weight:700; color:var(--terra); text-transform:uppercase; font-size:11px; letter-spacing:.5px; }
+/* O tipo virou seletor, não rótulo — precisa PARECER editável, senão ninguém descobre que
+   dá para corrigir e a pessoa rejeita a relação boa por causa do tipo errado. */
+select.tp { border:1px solid var(--line); border-radius:7px; padding:3px 6px; background:#fff;
+            cursor:pointer; text-transform:none; letter-spacing:0; font-size:12px; }
+select.tp:hover { border-color:var(--terra); }
 .rel .ev { color:var(--muted); font-size:12px; font-style:italic; line-height:1.5; margin:6px 0; }
 .rel .acoes { display:flex; gap:6px; }
 .rel button { padding:4px 11px; border-radius:7px; border:1px solid var(--line); background:#fff; cursor:pointer;
@@ -274,6 +279,16 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 let usuario = null, colecaoId = null, config = {};
 let arvore = [], porId = {}, palavras = [], regimes = [], regAquis = [], docAtual = null, relAtual = [];
 let selAssuntos = [], selPalavras = [], decisoesRel = {}, campos = {};
+/* Correção do TIPO da relação sugerida, por id. O extrator erra o tipo com frequência
+   conhecida: numa cláusula em lista — "Art. 4º Ficam revogados: I - da Portaria X: o
+   art. 32; II - a Portaria Y; III - a Portaria Z" — os dispositivos do inciso I vazam
+   para os demais, e revogação INTEGRAL chega marcada como parcial. Medido em 27/08/2026:
+   72 das 142 relações `revoga_parcialmente` do acervo dividem a evidência com outra
+   relação da mesma origem, que é a assinatura desse vazamento.
+   Sem poder corrigir o tipo, quem revisa só tinha saídas ruins: confirmar o tipo errado,
+   ou rejeitar e reincluir à mão — e a inclusão manual não alimenta `ato_revogacao`, então
+   a revogação total sumiria do campo que a registra. */
+let tiposRel = {};
 let estagioAtual = 'esp1';
 // O resultado da ferramenta serve para refinar a taxonomia e as regras de indexação.
 // Por isso o que foi RECUSADO importa tanto quanto o aceito — foi assim que se mediu a
@@ -735,7 +750,7 @@ async function abrir(id){
   // e a pessoa pode legitimamente precisar consultar a norma que o colega está indexando.
   travaDeOutro = eraDeOutro && travaViva(d) && d.em_andamento_por !== usuario.id ? d : null;
   estagioAtual = d.status === 'aguardando_esp2' ? 'esp2' : 'esp1';
-  selAssuntos = []; selPalavras = []; decisoesRel = {}; campos = {};
+  selAssuntos = []; selPalavras = []; decisoesRel = {}; tiposRel = {}; campos = {};
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
   legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
   propostas = {}; linhaPlanilha = null;
@@ -775,6 +790,7 @@ async function abrir(id){
     // sido registrado — e o trabalho estava gravado, só não era lido de volta.
     legisManuais = (campos.legis_manuais || []).slice();
     decisoesRel = Object.assign({}, campos.decisoes_rel || {});
+    tiposRel = Object.assign({}, campos.tipos_rel || {});
   } else {
     campos.situacao_norma = d.situacao_norma || '';
   }
@@ -787,6 +803,7 @@ async function abrir(id){
     if (Array.isArray(r.assuntos)) selAssuntos = r.assuntos.slice();
     if (Array.isArray(r.palavras)) selPalavras = r.palavras.slice();
     if (r.decisoesRel) decisoesRel = Object.assign({}, r.decisoesRel);
+    if (r.tiposRel) tiposRel = Object.assign({}, r.tiposRel);
     if (Array.isArray(r.legisManuais)) legisManuais = r.legisManuais.slice();
     if (Array.isArray(r.propostasNovas)) propostasNovas = r.propostasNovas.slice();
     if (typeof r.patrimonial === 'boolean') patrimonial = r.patrimonial;
@@ -842,7 +859,7 @@ async function abrir(id){
 // do banco e a ficha da etapa anterior, então medir "tem conteúdo" dava tocada=true em
 // toda norma que já tivesse qualquer dado — e nada era liberado ao voltar.
 function instantaneoFicha(){
-  return JSON.stringify([patrimonial, selAssuntos, selPalavras, decisoesRel, campos,
+  return JSON.stringify([patrimonial, selAssuntos, selPalavras, decisoesRel, tiposRel, campos,
                          legisManuais, propostasNovas, rejeitadas, propostas,
                          precisaCompilar, compilada]);
 }
@@ -1650,12 +1667,22 @@ function renderRel(r){
                     regulamenta:'regulamentada', retifica:'retificada' };
   const ativa = { altera:'altera', revoga:'revoga', revoga_parcialmente:'revoga em parte',
                   regulamenta:'regulamenta', retifica:'retifica' };
-  const frase = souOrigem ? `Esta norma <b>${ativa[r.tipo] || r.tipo}</b>`
-                          : `Esta norma <b>foi ${passiva[r.tipo] || r.tipo}</b> por`;
+  const tEfetivo = tipoDe(r);
+  const corrigido = tEfetivo !== r.tipo;
+  const frase = souOrigem ? `Esta norma <b>${ativa[tEfetivo] || tEfetivo}</b>`
+                          : `Esta norma <b>foi ${passiva[tEfetivo] || tEfetivo}</b> por`;
   const d = decisoesRel[r.id];
-  const disp = (r.dispositivos_afetados||[]).length ? ` <span class="cnt">(${r.dispositivos_afetados.join(', ')})</span>` : '';
-  const rotulo = { revoga:'revoga', revoga_parcialmente:'revoga em parte',
-                   altera:'altera', regulamenta:'regulamenta', retifica:'retifica' }[r.tipo] || r.tipo;
+  // dispositivo só faz sentido em revogação/alteração parcial; corrigido para integral,
+  // o que estava listado ali veio do vazamento da cláusula em lista e deixa de valer
+  const disp = (!corrigido && (r.dispositivos_afetados||[]).length)
+    ? ` <span class="cnt">(${r.dispositivos_afetados.join(', ')})</span>` : '';
+  const OPCOES = { revoga:'revoga (integral)', revoga_parcialmente:'revoga em parte',
+                   altera:'altera', regulamenta:'regulamenta', retifica:'retifica' };
+  const seletor = `<select class="tp" onchange="corrigirTipoRel(${arg(r.id)}, this.value)"
+        title="o tipo sugerido pode estar errado — corrija aqui em vez de rejeitar">` +
+    Object.keys(OPCOES).map(k => `<option value="${k}"${k===tEfetivo?' selected':''}>` +
+      esc(OPCOES[k]) + '</option>').join('') + '</select>' +
+    (corrigido ? ` <span class="cnt" title="sugerido: ${esc(OPCOES[r.tipo]||r.tipo)}">corrigido</span>` : '');
   // link para abrir a norma relacionada no Memória SPU, em aba nova: conferir sem perder
   // o que já foi preenchido nesta ficha
   const idOutro = souOrigem ? r.destino_id : r.origem_id;
@@ -1664,7 +1691,7 @@ function renderRel(r){
     ? ` <a href="${esc(dOutro.public_url)}" target="_blank" rel="noopener"
            title="abrir no Memória SPU, em aba nova" style="color:var(--accent);font-size:12px">abrir ↗</a>` : '';
   return `<div class="rel ${r.confianca < 0.7 ? 'ocr':''}">
-    <div class="cab"><span class="tp">${esc(rotulo)}</span>
+    <div class="cab">${seletor}
       <span class="acoes">
         <button class="sim ${d==='confirmada'?'on':''}" onclick="decidirRel(${arg(r.id)}, ${arg("confirmada")})">confirma</button>
         <button class="nao ${d==='rejeitada'?'on':''}" onclick="decidirRel(${arg(r.id)}, ${arg("rejeitada")})">não</button>
@@ -1674,6 +1701,14 @@ function renderRel(r){
   </div>`;
 }
 function decidirRel(id, v){ decisoesRel[id] = decisoesRel[id] === v ? undefined : v; renderFicha(); }
+/* O tipo que vale: o corrigido por quem revisa, ou o que o extrator sugeriu. */
+function tipoDe(r){ return tiposRel[r.id] || r.tipo; }
+function corrigirTipoRel(id, t){
+  const r = relAtual.find(x => x.id === id);
+  if (!r) return;
+  if (t === r.tipo) delete tiposRel[id]; else tiposRel[id] = t;
+  renderFicha();
+}
 
 /* O rótulo da outra ponta da relação. Quando esta norma é a origem, interessa o destino;
    quando ela é o destino (foi alterada/revogada por alguém), interessa a origem. */
@@ -1882,20 +1917,21 @@ async function salvar(modo){
     // via a legislação relacionada nem as relações que o estágio anterior confirmou
     legis_manuais: legisManuais,
     decisoes_rel: decisoesRel,
+    tipos_rel: tiposRel,
     assuntos_caminho: selAssuntos.map(id => (porId[id]||{}).caminho || ''),
     legislacao_relacionada: legisIds.join('||'),
     legislacao_relacionada_titulos: relacionadas.map(x => x.titulo),
     legislacao_sem_cadastro: semId,
-    ato_alteracao: idsDe(r => r.tipo==='altera' && r.origem_id===docAtual.id, r => r.destino_id),
+    ato_alteracao: idsDe(r => tipoDe(r)==='altera' && r.origem_id===docAtual.id, r => r.destino_id),
     // Só revogação TOTAL entra em "Ato de Revogação". Revogação parcial ali dentro faria a
     // norma constar como revogada quando ela segue vigente com um ou dois artigos a menos —
     // é o erro encontrado na Portaria 7.081. Vai para campo próprio e para legislação relacionada.
-    ato_revogacao: idsDe(r => r.tipo==='revoga' && r.destino_id===docAtual.id, r => r.origem_id),
-    revogacao_parcial: idsDe(r => r.tipo==='revoga_parcialmente' && r.destino_id===docAtual.id, r => r.origem_id),
+    ato_revogacao: idsDe(r => tipoDe(r)==='revoga' && r.destino_id===docAtual.id, r => r.origem_id),
+    revogacao_parcial: idsDe(r => tipoDe(r)==='revoga_parcialmente' && r.destino_id===docAtual.id, r => r.origem_id),
     dispositivos_revogados: [...new Set(confirmadas
-      .filter(r => r.tipo==='revoga_parcialmente' && r.destino_id===docAtual.id)
+      .filter(r => tipoDe(r)==='revoga_parcialmente' && r.destino_id===docAtual.id)
       .flatMap(r => r.dispositivos_afetados || []))],
-    norma_regulamentacao: idsDe(r => r.tipo==='regulamenta', r => r.destino_id)
+    norma_regulamentacao: idsDe(r => tipoDe(r)==='regulamenta', r => r.destino_id)
   });
 
   /* Registro para calibração. Sem distinguir estes quatro casos não dá para responder
@@ -1926,9 +1962,16 @@ async function salvar(modo){
   const relacoesQueFalharam = [];
   for (const r of relAtual) {
     if (!decisoesRel[r.id]) continue;
-    const resp = await sb.from('relacoes_norma').update({
-      status: decisoesRel[r.id], confirmado_por: usuario.id, confirmado_em: new Date().toISOString()
-    }).eq('id', r.id).select('id');
+    /* A correção de tipo vai para a TABELA, não só para esta ficha: o tipo errado veio
+       do extrator e erraria de novo para a próxima pessoa que abrisse a norma. Corrigido
+       para integral, o dispositivo listado sai junto — ele era o vazamento. */
+    const mudanca = { status: decisoesRel[r.id], confirmado_por: usuario.id,
+                      confirmado_em: new Date().toISOString() };
+    if (tiposRel[r.id] && tiposRel[r.id] !== r.tipo) {
+      mudanca.tipo = tiposRel[r.id];
+      if (tiposRel[r.id] === 'revoga') mudanca.dispositivos_afetados = [];
+    }
+    const resp = await sb.from('relacoes_norma').update(mudanca).eq('id', r.id).select('id');
     // sem alerta por relação: numa norma com dez relações seriam dez caixas seguidas
     if (resp.error || !(resp.data || []).length) relacoesQueFalharam.push(r.id);
   }
@@ -2026,7 +2069,7 @@ async function salvarRascunho(){
   // afirmação: se a norma já for de outro, a mensagem não pode mentir.
   const { error } = await sb.from('documentos').update({
     rascunho: { patrimonial, campos, assuntos: selAssuntos, palavras: selPalavras,
-                decisoesRel, legisManuais, propostasNovas },
+                decisoesRel, tiposRel, legisManuais, propostasNovas },
     rascunho_por: usuario.id,
     rascunho_em: agora
   }).eq('id', docAtual.id);
