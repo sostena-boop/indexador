@@ -1627,9 +1627,69 @@ function buscarPalavra(v){
   const cx = document.getElementById('buscaPc');
   if (cx) { cx.focus(); cx.setSelectionRange(v.length, v.length); }
 }
+/* ---------- aviso de termo parecido ----------
+
+   O termo proposto por quem indexa passa a ser sugerido às normas seguintes. Sem freio,
+   cada variação vira sugestão para todo mundo, e o vocabulário se esgarça em vez de se
+   formar. As variações não são hipótese: entre os 27 termos digitados à mão já convivem
+   "regime de governança" e "regime especial de governança", "gestão do conhecimento" e
+   "organização do conhecimento", "Aplicação de multas" e "Multa administrativa".
+
+   O limiar 0,40 foi calibrado contra o vocabulário real, em `scripts/calibrar_termo_
+   parecido.py`, medindo os dois lados. A 0,30 apareciam falsos positivos ("domínio
+   originário" avisava sobre "Domínio útil", "pleno" e "direto", que são outra coisa);
+   a 0,40 eles somem e os casos verdadeiros ficam. Na família "Uso para ...", que tem
+   dezenas de termos, dá 1 aviso — não dezenas.
+
+   Contenção conta como muito parecido, mas só quando o menor tem duas palavras ou mais:
+   "Imóvel" está contido em qualquer termo que cite imóvel e sozinho dispararia aviso em
+   metade do vocabulário.
+
+   É AVISO, não bloqueio. Quem indexa lê a norma; o algoritmo lê palavras. */
+const PARADAS_TERMO = new Set(['de','da','do','das','dos','e','a','o','as','os','em','no',
+  'na','nos','nas','para','por','com','ao','aos','um','uma','ou']);
+
+function fichasTermo(t){
+  const out = new Set();
+  norm(t).replace(/[\/,()]/g, ' ').split(/\s+/).forEach(w => {
+    w = w.replace(/[^a-z0-9]/g, '');
+    if (w.length < 3 || PARADAS_TERMO.has(w)) return;
+    out.add(w.endsWith('s') && w.length > 4 ? w.slice(0, -1) : w);   // plural simples
+  });
+  return out;
+}
+
+function semelhancaTermo(a, b){
+  const A = fichasTermo(a), B = fichasTermo(b);
+  if (!A.size || !B.size) return 0;
+  const inter = [...A].filter(x => B.has(x)).length;
+  if (!inter) return 0;
+  const contido = inter === A.size || inter === B.size;
+  const menor = Math.min(A.size, B.size);
+  if (contido && menor >= 2) return 1;
+  return inter / (A.size + B.size - inter);
+}
+
+function termosParecidos(t){
+  const vistos = new Set();
+  return palavras.concat(propostasNovas.map(x => ({ termo: x })))
+    .map(p => ({ termo: p.termo, s: semelhancaTermo(t, p.termo) }))
+    .filter(x => x.s >= 0.40 && norm(x.termo) !== norm(t))
+    .filter(x => { const k = norm(x.termo); if (vistos.has(k)) return false; vistos.add(k); return true; })
+    .sort((a, b) => b.s - a.s).slice(0, 5);
+}
+
 function proporTermo(){
   const t = buscaPalavra.trim();
   if (!t || propostasNovas.includes(t)) return;
+  const parecidos = termosParecidos(t);
+  if (parecidos.length && !confirm(
+      'Já existe termo parecido no vocabulário:\n\n  ' +
+      parecidos.map(x => '· ' + x.termo).join('\n  ') +
+      '\n\nUsar o que já existe mantém o vocabulário coeso; propor uma variação o esgarça.' +
+      '\n\nPropor "' + t + '" mesmo assim?')) {
+    return;
+  }
   propostasNovas.push(t);
   if (selPalavras.length < limitePalavras()) selPalavras.push(t);
   buscaPalavra = '';
