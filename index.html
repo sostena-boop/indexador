@@ -2154,12 +2154,44 @@ async function salvar(modo){
 /* A recusa por quatro olhos não é falha: é a regra funcionando. Mostrá-la como
    "Erro ao salvar: <mensagem do banco>" faz parecer defeito e leva quem usa a tentar de
    novo. Aqui ela é explicada, e o resto continua sendo erro de verdade. */
+/* A mensagem dos "dois pares de olhos" saiu com o gatilho, em 01/09/2026. Ela dizia para
+   passar a norma a um colega, o que agora seria instrução errada: qualquer indexador pode
+   corrigir qualquer norma, inclusive a própria.
+
+   O que a substituiu foi pior enquanto durou. Em 04/09 a Andrea viu na tela:
+
+     "duplicate key value violates unique constraint etapas_revisao_documento_id_estagio_key"
+
+   Texto cru do Postgres não diz a quem indexa nem o que aconteceu, nem o que fazer — e o
+   pior: ela concluiu que tinha gravado, porque a indexação anterior estava lá. Erro que a
+   pessoa não entende é erro que ela interpreta, e a interpretação favorável é a que
+   perde trabalho em silêncio.
+
+   Daí a regra desta função: a pessoa recebe o que ACONTECEU e o que FAZER; o texto
+   técnico vai junto, no fim, para quem for investigar. Nunca só o texto técnico. */
 function explicarErroDeEtapa(error){
   const m = (error && error.message) || '';
-  /* A mensagem dos "dois pares de olhos" saiu com o gatilho, em 01/09/2026. Ela dizia
-     para passar a norma a um colega, o que agora seria instrução errada: qualquer
-     indexador pode corrigir qualquer norma, inclusive a própria. */
-  return 'Erro ao salvar: ' + m;
+  const tecnico = m ? '\n\nDetalhe técnico, para quem for investigar:\n' + m : '';
+
+  if (/duplicate key|unique constraint/i.test(m)) {
+    return 'Não consegui gravar: o banco recusou uma segunda gravação desta norma.\n\n' +
+           'Isto é defeito da ferramenta, não erro seu. Avise a equipe do Memória SPU.\n\n' +
+           'O que você fez agora NÃO foi salvo — use "salvar rascunho" para não perder.' + tecnico;
+  }
+  if (/row-level security|permission denied|violates row-level/i.test(m)) {
+    return 'Não consegui gravar: o banco recusou a permissão.\n\n' +
+           'Costuma ser sessão expirada. Saia e entre de novo; se persistir, avise a ' +
+           'equipe do Memória SPU.\n\nO que você fez agora NÃO foi salvo — use ' +
+           '"salvar rascunho" antes de sair.' + tecnico;
+  }
+  if (/fetch|network|failed to fetch/i.test(m)) {
+    return 'Não consegui falar com o banco — parece queda de conexão.\n\n' +
+           'O que você fez agora NÃO foi salvo. Confira a rede e tente de novo; ' +
+           '"salvar rascunho" também serve para não perder.' + tecnico;
+  }
+  return 'Não consegui gravar esta revisão, e o que você fez agora NÃO foi salvo.\n\n' +
+         'Use "salvar rascunho" para não perder o trabalho, e avise a equipe do ' +
+         'Memória SPU.' + tecnico;
 }
 
 /* Toda escrita no banco passa por aqui. Existe por dois motivos concretos:
