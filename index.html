@@ -865,6 +865,9 @@ async function abrir(id){
   // a triagem só é perguntada uma vez: se o estágio anterior já decidiu, herda
   patrimonial = (ant && ant.patrimonial !== null && ant.patrimonial !== undefined)
     ? ant.patrimonial : null;
+  // Norma já recusada: o motivo gravado volta para o campo. Sem isto, reabrir mostrava o
+  // motivo em branco — e, com o motivo obrigatório, obrigaria a redigitar o que já existe.
+  if (patrimonial === false && !campos.motivo_recusa) campos.motivo_recusa = motivoDaRecusa(ant);
   renderDoc();
   renderFicha();
   baseFicha = instantaneoFicha();   // tudo que vier depois disto é trabalho da pessoa
@@ -1513,11 +1516,11 @@ function renderTriagem(){
       <button class="b sec" onclick="responderTriagem(false)">Não é patrimonial</button>
     </div>
     ${rec ? `
-      <div class="campo"><label>Motivo da recusa</label>
-        <input type="text" id="motivoRec" value="${esc(campos.motivo_recusa||'')}"
-               placeholder="ex.: trata de diárias e passagens"
+      <div class="campo"><label>Motivo da recusa — obrigatório</label>
+        <input type="text" id="motivoRec" value="${esc(campos.motivo_recusa||'')}" required
+               placeholder="obrigatório — ex.: trata de diárias e passagens"
                oninput="setCampo(${arg("motivo_recusa")}, this.value)"></div>
-      <div class="aviso">Ao salvar, a norma segue para conferência já marcada como
+      <div class="aviso">Ao salvar, a norma fica indexada como
         <b>recusada por não ser patrimonial</b>. Assunto e palavras-chave não são preenchidos.</div>
       <!-- O cadastro aparece mesmo na norma recusada: título errado é erro de registro
            independentemente de a norma entrar ou não na coleção, e a devolutiva é o mesmo
@@ -1958,7 +1961,32 @@ async function gravarPropostas(){
    caminho de sempre e fecha a etapa. A separação existe por causa da compilação: ela
    pode travar por dias esperando acesso ao SharePoint, e perder a revisão cadastral e a
    indexação já feitas por causa disso seria absurdo. */
+/* Um clique, uma gravação. Em 04/09/2026 a Portaria SPU/MGI nº 100 ganhou duas etapas
+   idênticas com 1,16 s de intervalo: clique duplo. A restrição de unicidade que impedia
+   isso por acidente saiu na correção do fluxo, e nada ficou no lugar.
+   A trava é uma variável e não só o botão desabilitado, porque há três botões que chamam
+   `salvar` (rascunho, concluir, recusar) e a ficha é redesenhada durante a gravação —
+   um `disabled` no DOM some no primeiro `renderFicha()`. */
+let gravando = false;
+
 async function salvar(modo){
+  if (gravando) return;
+  gravando = true;
+  document.querySelectorAll('button[onclick^="salvar("]').forEach(b => {
+    b.disabled = true; b.dataset.rotulo = b.textContent; b.textContent = 'gravando…';
+  });
+  try {
+    return await salvarUmaVez(modo);
+  } finally {
+    gravando = false;
+    // os botões podem já ter sido recriados; os que sobraram voltam ao normal
+    document.querySelectorAll('button[onclick^="salvar("]').forEach(b => {
+      b.disabled = false; if (b.dataset.rotulo) b.textContent = b.dataset.rotulo;
+    });
+  }
+}
+
+async function salvarUmaVez(modo){
   modo = modo || 'concluir';
 
   if (modo === 'rascunho') return salvarRascunho();
@@ -1982,8 +2010,20 @@ async function salvar(modo){
   }
   if (patrimonial === null) { alert('Responda primeiro se a norma é patrimonial.'); return; }
 
-  // recusa na triagem: não há ficha a preencher, o item segue para conferência
+  // recusa na triagem: não há ficha a preencher
   if (patrimonial === false) {
+    /* Motivo obrigatório. A documentação sempre disse que era, e o código nunca exigiu:
+       em 14/09/2026, 9 das 16 recusas estavam sem motivo — entre elas a da Portaria ME
+       nº 7.081, o caso que o projeto já tinha registrado como recusa errada. Sem motivo,
+       uma recusa errada é indistinguível de uma certa, e ninguém consegue revisá-la. */
+    if (!(campos.motivo_recusa || '').trim()) {
+      alert('Diga por que esta norma não é patrimonial.\n\n' +
+            'O motivo é o que permite a outra pessoa conferir a recusa depois. ' +
+            'Uma linha basta — ex.: "trata de diárias e passagens".');
+      const cx = document.getElementById('motivoRec');
+      if (cx) cx.focus();
+      return;
+    }
     const { error } = await sb.from('etapas_revisao').insert({
       documento_id: docAtual.id, estagio: estagioAtual, usuario_id: usuario.id,
       patrimonial: false, motivo_recusa: campos.motivo_recusa || null,
@@ -2536,9 +2576,22 @@ async function baixarXlsx(abas, nome){
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
+/* O motivo mora em dois lugares por herança da gravação, e a leitura aceita os dois: a
+   coluna `motivo_recusa` e `campos.motivo`. `campos.motivo_recusa` fica por último só para
+   o caso de alguma etapa antiga tê-lo usado. */
+function motivoDaRecusa(e){
+  const c = (e && e.campos) || {};
+  return (e && e.motivo_recusa) || c.motivo || c.motivo_recusa || '';
+}
+
 async function exportarExcel(){
+  /* `patrimonial` e `motivo_recusa` precisam vir no select. Sem eles as duas colunas da
+     recusa saíam SEMPRE vazias: `e.patrimonial === false` nunca era verdadeiro porque o
+     campo não chegava, e o motivo era lido de `campos.motivo_recusa`, chave que a
+     gravação da recusa nunca escreveu — ela grava `motivo_recusa` na coluna e `motivo`
+     dentro de `campos`. Medido em 14/09/2026: 16 recusas, 7 com motivo escrito, 0 no Excel. */
   const { data: etapas } = await sb.from('etapas_revisao')
-    .select('documento_id,estagio,campos,termos,criado_em,usuario_id').limit(2000);
+    .select('documento_id,estagio,campos,termos,criado_em,usuario_id,patrimonial,motivo_recusa').limit(2000);
   const { data: docs } = await sb.from('documentos')
     .select('id,item_id_tainacan,titulo,lote').eq('colecao_id', colecaoId).limit(1000);
   const { data: props } = await sb.from('v_propostas_cadastro_vigentes')
@@ -2564,7 +2617,7 @@ async function exportarExcel(){
       cam[0]||'', cam[1]||'', cam[2]||'', c.regime_destinacao||'', c.regime_aquisicao||'', pcs,
       c.situacao_norma||'', c.data_inicio_vigencia||'', c.ato_revogacao||'', c.revogado_em||'',
       c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'',
-      e.patrimonial === false ? 'sim' : '', c.motivo_recusa||'',
+      e.patrimonial === false ? 'sim' : '', motivoDaRecusa(e),
       nomeDe(e.usuario_id), dataCurta(e.criado_em) ]);
   });
 
