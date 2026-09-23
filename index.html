@@ -223,6 +223,9 @@ select.tp:hover { border-color:var(--terra); }
             <option value="indexado">Indexadas — trabalho concluído</option>
             <option value="todas">Todas — em qualquer estágio</option>
           </select>
+          <!-- filtro de lote: só aparece quando há mais de um lote liberado. Com um só,
+               seria um seletor de uma opção — ruído. -->
+          <select id="fLote" onchange="carregarFila()" class="hidden"></select>
           <input type="text" id="fTitulo" placeholder="buscar no título, número ou texto da norma" style="width:290px"
                  oninput="if(!compondo(event)) buscaAtrasada()" autocomplete="off">
           <select id="fTipo" onchange="carregarFila()"><option value="">Todos os tipos</option></select>
@@ -615,6 +618,16 @@ async function carregarBase(){
   const uniq = [...new Set(acervo.map(t => t.tipo_norma).filter(Boolean).concat('Retificação'))].sort();
   document.getElementById('fTipo').innerHTML = '<option value="">Todos os tipos</option>' +
     uniq.map(t => `<option>${esc(t)}</option>`).join('');
+
+  /* Lotes: o trabalho é entregue por lote e a equipe acompanha por lote, mas quem indexa
+     costuma querer a fila inteira. Por isso "todos os liberados" é o padrão e o recorte
+     por lote é escolha, não obrigação. A lista sai de `lotes_liberados` — nada aqui
+     precisa mudar quando o lote 3 chegar. */
+  const lotes = lotesLiberados();
+  const selLote = document.getElementById('fLote');
+  selLote.classList.toggle('hidden', lotes.length < 2);
+  selLote.innerHTML = '<option value="">Todos os lotes liberados</option>' +
+    lotes.map(l => `<option value="${esc(l)}">Lote ${esc(l)}</option>`).join('');
 }
 
 /* ---------- fila ---------- */
@@ -627,6 +640,11 @@ function buscaAtrasada(){
 async function carregarFila(){
   const st = document.getElementById('fEstagio').value;
   const tipo = document.getElementById('fTipo').value;
+  // lote escolhido; vazio = todos os liberados. Nunca alcança lote não liberado: o valor
+  // sai da própria lista de liberados.
+  const lote = (document.getElementById('fLote') || {}).value || '';
+  const filtroLote = q => haGateDeLote()
+    ? (lote ? q.eq('lote', lote) : q.in('lote', lotesLiberados())) : q;
 
   const busca = (document.getElementById('fTitulo').value || '').trim();
   const ordem = document.getElementById('fOrdem').value;
@@ -644,7 +662,10 @@ async function carregarFila(){
     // busca por título, número, ementa E texto integral, com trecho do achado.
     // O estágio deixa de filtrar: quem procura uma norma quer achá-la em qualquer fila.
     const { data } = await sb.rpc('buscar_normas', { termo: busca, limite: 80 });
-    linhas = (data || []).filter(d => !tipo || d.tipo_norma === tipo);
+    linhas = (data || []).filter(d => (!tipo || d.tipo_norma === tipo)
+      // a busca alcança a coleção inteira; o recorte por lote, quando escolhido, vale
+      // para ela também — mas só quando o resultado traz o lote
+      && (!lote || d.lote === undefined || d.lote === lote));
     // na busca, "ordem da fila" quer dizer manter o ranqueamento por relevância
     if (ordem !== 'fila') linhas.sort(porAno);
     count = linhas.length;
@@ -658,8 +679,8 @@ async function carregarFila(){
        se foi buscar ali. Nos estágios, a reserva continua sumindo da fila de quem não
        pegou, que é o que evita duas pessoas na mesma norma no mutirão. */
     if (st !== 'todas') q = q.eq('status', st).or(filtroTrava());
-    // a fila mostra só o lote liberado; a busca por texto continua alcançando tudo
-    if (haGateDeLote()) q = q.in('lote', lotesLiberados());
+    // a fila mostra só o lote liberado (ou o lote escolhido); a busca alcança tudo
+    q = filtroLote(q);
     if (ordem === 'fila') q = q.order('ordem_fila', { ascending: true });
     else q = q.order('ano_publicacao', { ascending: ordem === 'antiga', nullsFirst: false })
                .order('titulo', { ascending: true });
@@ -679,7 +700,7 @@ async function carregarFila(){
       let qt = sb.from('documentos')
         .select('id', { count:'exact', head:true })
         .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).eq('status', st);
-      if (haGateDeLote()) qt = qt.in('lote', lotesLiberados());
+      qt = filtroLote(qt);
       if (tipo) qt = qt.eq('tipo_norma', tipo);
       const rt = await qt;
       comOutraPessoa = Math.max(0, (rt.count || 0) - count);
@@ -710,7 +731,7 @@ async function carregarFila(){
         + '</span>'
       : '') +
     (haGateDeLote()
-      ? ` · <b>lote ${esc(lotesLiberados().join(', '))}</b>` +
+      ? ` · <b>lote ${esc(lote || lotesLiberados().join(', '))}</b>` +
         (busca ? ' <span class="cnt">a busca alcança toda a coleção</span>' : '')
       : '');
   document.getElementById('filaBox').innerHTML = linhas.length ? `
@@ -720,6 +741,8 @@ async function carregarFila(){
       const quem = creditos(etapasPorDoc[d.id]);
       return `<tr>
       <td><a onclick="abrir(${arg(d.id)})">${esc(d.titulo)}</a>
+          ${(d.lote && lotesLiberados().length > 1 && !lote)
+              ? '<span class="pill" title="lote de entrega">lote ' + esc(d.lote) + '</span>' : ''}
           ${d.em_duvida ? '<span class="pill duv">dúvida</span>' : ''}
           ${travaViva(d) ? '<span class="pill esp1" title="' + (d.rascunho_por
               ? 'tem rascunho salvo — a reserva não expira'
