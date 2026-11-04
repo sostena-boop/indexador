@@ -365,7 +365,24 @@ const CAMPOS_CADASTRO = [
   { k: 'orgao_edicao_2',  r: 'Órgão de edição 2',  lista: 'orgaos', soConjunta: true },
 ];
 
-const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Revogado','Revogado tacitamente'];
+const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Suspenso',
+                  'Revogado','Revogado tacitamente','Revogado expressamente'];
+/* Fonte única dos tipos de relação: rótulo do seletor, verbo ativo e particípio passivo.
+   Antes isso vivia em quatro mapas espalhados — `OPCOES` em dois lugares, `ativa` e
+   `passiva` — e acrescentar um tipo exigia lembrar dos quatro. A frase passiva é montada
+   sempre como "foi <particípio> por", e não escrita à mão caso a caso.
+
+   `suspende` entrou em 04/11/2026: a norma suspensa não foi revogada nem alterada — ela
+   continua existindo, com a eficácia parada, e pode voltar. A suspensão parcial se diz
+   listando os dispositivos afetados, como nas demais; não há `suspende_parcialmente`. */
+const TIPOS_REL = {
+  revoga:              { opcao:'revoga (integral)', ativa:'revoga',          passiva:'revogada' },
+  revoga_parcialmente: { opcao:'revoga em parte',   ativa:'revoga em parte', passiva:'revogada em parte' },
+  suspende:            { opcao:'suspende',          ativa:'suspende',        passiva:'suspensa' },
+  altera:              { opcao:'altera',            ativa:'altera',          passiva:'alterada' },
+  regulamenta:         { opcao:'regulamenta',       ativa:'regulamenta',     passiva:'regulamentada' },
+  retifica:            { opcao:'retifica',          ativa:'retifica',        passiva:'retificada' }
+};
 /* Rótulos do fluxo antigo, de dois estágios. Mantidos só para as etapas já gravadas com
    esses valores continuarem legíveis — desde 01/09/2026 grava-se sempre `esp1` e a tela
    não fala mais em "Especialista 1 e 2". */
@@ -1295,8 +1312,10 @@ function renderFicha(){
     <div class="campo"><label>Situação da norma</label>
       <select onchange="setSituacao(this.value)">
         <option value="">—</option>
-        ${SITUACOES.map(s => `<option ${campos.situacao_norma===s?'selected':''}>${s}</option>`).join('')}
-      </select></div>
+        ${situacoesDaFicha().map(s => `<option ${campos.situacao_norma===s?'selected':''}>${esc(s)}</option>`).join('')}
+      </select>
+      ${campos.situacao_norma && !SITUACOES.includes(campos.situacao_norma)
+        ? '<div class="ajuda" style="color:var(--warn)">Valor fora da lista, vindo da planilha. Mantido para não se perder — troque só se souber pelo quê.</div>' : ''}</div>
     <div class="campo"><label>Início de vigência</label>
       <input type="text" placeholder="dd/mm/aaaa" value="${esc(campos.data_inicio_vigencia||'')}"
              oninput="setCampo(${arg("data_inicio_vigencia")}, mascaraData(this)); criticarData(this)">
@@ -1809,26 +1828,22 @@ function campoRegime(){
 function renderRel(r){
   const souOrigem = r.origem_id === docAtual.id;
   const outro = outraPonta(r);
-  const passiva = { altera:'alterada', revoga:'revogada', revoga_parcialmente:'revogada em parte',
-                    regulamenta:'regulamentada', retifica:'retificada' };
-  const ativa = { altera:'altera', revoga:'revoga', revoga_parcialmente:'revoga em parte',
-                  regulamenta:'regulamenta', retifica:'retifica' };
   const tEfetivo = tipoDe(r);
   const corrigido = tEfetivo !== r.tipo;
-  const frase = souOrigem ? `Esta norma <b>${ativa[tEfetivo] || tEfetivo}</b>`
-                          : `Esta norma <b>foi ${passiva[tEfetivo] || tEfetivo}</b> por`;
+  const verbo = TIPOS_REL[tEfetivo] || { ativa: tEfetivo, passiva: tEfetivo, opcao: tEfetivo };
+  const frase = souOrigem ? `Esta norma <b>${verbo.ativa}</b>`
+                          : `Esta norma <b>foi ${verbo.passiva}</b> por`;
   const d = decisoesRel[r.id];
   // dispositivo só faz sentido em revogação/alteração parcial; corrigido para integral,
   // o que estava listado ali veio do vazamento da cláusula em lista e deixa de valer
   const disp = (!corrigido && (r.dispositivos_afetados||[]).length)
     ? ` <span class="cnt">(${r.dispositivos_afetados.join(', ')})</span>` : '';
-  const OPCOES = { revoga:'revoga (integral)', revoga_parcialmente:'revoga em parte',
-                   altera:'altera', regulamenta:'regulamenta', retifica:'retifica' };
+  const rotulo = k => (TIPOS_REL[k] || {}).opcao || k;
   const seletor = `<select class="tp" onchange="corrigirTipoRel(${arg(r.id)}, this.value)"
         title="o tipo sugerido pode estar errado — corrija aqui em vez de rejeitar">` +
-    Object.keys(OPCOES).map(k => `<option value="${k}"${k===tEfetivo?' selected':''}>` +
-      esc(OPCOES[k]) + '</option>').join('') + '</select>' +
-    (corrigido ? ` <span class="cnt" title="sugerido: ${esc(OPCOES[r.tipo]||r.tipo)}">corrigido</span>` : '');
+    Object.keys(TIPOS_REL).map(k => `<option value="${k}"${k===tEfetivo?' selected':''}>` +
+      esc(rotulo(k)) + '</option>').join('') + '</select>' +
+    (corrigido ? ` <span class="cnt" title="sugerido: ${esc(rotulo(r.tipo))}">corrigido</span>` : '');
   // link para abrir a norma relacionada no Memória SPU, em aba nova: conferir sem perder
   // o que já foi preenchido nesta ficha
   const idOutro = souOrigem ? r.destino_id : r.origem_id;
@@ -1861,16 +1876,11 @@ function renderRel(r){
    A gravação é imediata, com `status = 'pendente'` e já confirmada nesta sessão. Assim a
    relação sobrevive se a pessoa fechar a ficha sem concluir, e segue o mesmo caminho das
    detectadas na hora de salvar — nenhuma regra nova no gravador. */
-const SENTIDOS = {
-  ativa:   { altera:'altera', revoga:'revoga', revoga_parcialmente:'revoga em parte',
-             regulamenta:'regulamenta', retifica:'retifica' },
-  passiva: { altera:'foi alterada por', revoga:'foi revogada por',
-             revoga_parcialmente:'foi revogada em parte por',
-             regulamenta:'é regulamentada por', retifica:'foi retificada por' }
-};
+function rotuloSentido(k, sentido){
+  const v = TIPOS_REL[k] || { ativa:k, passiva:k };
+  return sentido === 'ativa' ? v.ativa : `foi ${v.passiva} por`;
+}
 function blocoRelManual(){
-  const OPCOES = { revoga:'revoga (integral)', revoga_parcialmente:'revoga em parte',
-                   altera:'altera', regulamenta:'regulamenta', retifica:'retifica' };
   const achados = resultadosRelNorma();
   const aberto = relManAberto === null
     ? (ehRetificacao() && !relsConfirmaveis()) : relManAberto;
@@ -1884,8 +1894,8 @@ function blocoRelManual(){
         <option value="passiva" ${relNovo.sentido==='passiva'?'selected':''}>esta norma foi…</option>
       </select>
       <select onchange="setRelTipo(this.value)">
-        ${Object.keys(OPCOES).map(k => `<option value="${k}"${k===relNovo.tipo?' selected':''}>
-          ${esc(SENTIDOS[relNovo.sentido][k] || OPCOES[k])}</option>`).join('')}
+        ${Object.keys(TIPOS_REL).map(k => `<option value="${k}"${k===relNovo.tipo?' selected':''}>
+          ${esc(rotuloSentido(k, relNovo.sentido))}</option>`).join('')}
       </select>
     </div>
     <input type="text" id="buscaRelNorma" value="${esc(buscaRel)}" autocomplete="off"
@@ -1947,6 +1957,15 @@ async function addRelManual(docId){
   decisoesRel[data[0].id] = 'confirmada';
   buscaRel = '';
   renderFicha();
+}
+
+/* A lista da tela mais o valor que já está gravado, quando ele não está na lista. Sem
+   isso, abrir uma norma cuja situação veio da planilha com um termo que a tela não conhece
+   deixava o seletor em "—" e a gravação apagava o que estava lá, em silêncio. Aconteceu
+   com "Revogado expressamente", que a equipe usa e a tela não oferecia. */
+function situacoesDaFicha(){
+  const atual = campos.situacao_norma || '';
+  return atual && !SITUACOES.includes(atual) ? SITUACOES.concat([atual]) : SITUACOES;
 }
 
 function ehRetificacao(){
