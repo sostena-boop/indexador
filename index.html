@@ -176,6 +176,13 @@ select.tp:hover { border-color:var(--terra); }
 .rel button.sim.on { background:var(--ok); color:#fff; border-color:var(--ok); }
 .rel button.nao.on { background:var(--bad); color:#fff; border-color:var(--bad); }
 .rel.ocr { border-left:3px solid var(--terra); }
+.rel.rej { opacity:.62; border-left:3px solid var(--bad); }
+.relman { border:1px dashed var(--line); border-radius:10px; padding:9px 13px; margin-bottom:9px; background:#fff; font-size:13px; }
+.relman summary { cursor:pointer; font-weight:600; color:var(--terra); }
+.relman-linha { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.relman select { padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; font:inherit; }
+.relman input[type=text] { width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+.rel .marca { font-size:11px; color:var(--bad); text-transform:uppercase; letter-spacing:.5px; }
 
 .aviso { background:var(--warn-bg); color:var(--warn); border-radius:9px; padding:9px 12px; font-size:12.5px; margin-bottom:12px; }
 .aviso.err { background:var(--bad-bg); color:var(--bad); }
@@ -297,6 +304,15 @@ let estagioAtual = 'esp1';
 // taxa de aceite de 10% em julho. Guardar só os aceitos jogaria fora o sinal de calibração.
 let rejeitadas = [], propostasNovas = [], buscaPalavra = '';
 let acervo = [], docsPorId = {}, legisManuais = [], buscaLegis = '';
+/* Relação informada à mão. A detecção automática lê a ementa e o Art. 1º, e há ato
+   que não tem nem uma coisa nem outra — retificação de DOU é o caso puro, e ainda
+   vem com as letras espaçadas ("R E T I F I C AÇ ÃO"). Sem um caminho manual, a
+   relação obrigatória da retificação era impossível de cumprir pela tela. */
+let buscaRel = '', relNovo = { tipo: 'retifica', sentido: 'ativa' }, relSalvando = false;
+/* null = decide sozinho (abre quando não há o que confirmar); true/false = o que a
+   pessoa escolheu. Sem isso o bloco fecharia a cada tecla, porque a ficha é
+   redesenhada inteira a cada caractere digitado na busca. */
+let relManAberto = null;
 // id -> nome de quem revisou. A etapa grava usuario_id; sem este mapa a tela só sabia
 // dizer o ESTÁGIO ("Especialista 1"), que é o papel, não a pessoa.
 let perfisPorId = {};
@@ -787,6 +803,7 @@ async function abrir(id){
   selAssuntos = []; selPalavras = []; decisoesRel = {}; tiposRel = {}; campos = {};
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
   legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
+  buscaRel = ''; relManAberto = null; relNovo = { tipo: 'retifica', sentido: 'ativa' };
   propostas = {}; linhaPlanilha = null;
   precisaCompilar = d.precisa_compilar; compilada = d.compilada; linkDocx = null;
   temRascunho = !!(d.rascunho && typeof d.rascunho === 'object');
@@ -843,9 +860,15 @@ async function abrir(id){
     if (typeof r.patrimonial === 'boolean') patrimonial = r.patrimonial;
   }
 
+  /* Pendentes E rejeitadas. Carregando só as pendentes, uma rejeição por engano era
+     irreversível pela tela: a relação sumia e não havia como trazê-la de volta. Foi o que
+     prendeu a Retificação da Portaria 663 — a única relação detectada nela era um `revoga`
+     falso, vindo do rodapé de assinatura digital; rejeitado, ele sumiu, e a ficha passou a
+     exigir um `retifica` que não havia como criar. São 41 rejeitadas no acervo inteiro, no
+     máximo 3 por norma: trazê-las de volta não enche a tela. */
   const { data: rels } = await sb.from('relacoes_norma')
     .select('*, destino:destino_id(titulo,tipo_norma), origem:origem_id(titulo,tipo_norma)')
-    .or(`origem_id.eq.${id},destino_id.eq.${id}`).eq('status','pendente').limit(60);
+    .or(`origem_id.eq.${id},destino_id.eq.${id}`).in('status', ['pendente','rejeitada']).limit(60);
   relAtual = rels || [];
 
   document.getElementById('telaFila').classList.add('hidden');
@@ -1286,6 +1309,7 @@ function renderFicha(){
     <h3 class="blo">Relações entre normas</h3>
     <div class="ajuda" style="margin-bottom:10px">Detectadas na ementa e no Art. 1º. Confirme uma a uma — o trecho que originou cada detecção está à vista.</div>
     ${relsAlt.length ? relsAlt.map(r => renderRel(r)).join('') : '<div class="vazio">Nenhuma relação detectada para esta norma.</div>'}
+    ${blocoRelManual()}
 
     <div class="campo" style="margin-top:16px">
       <label>Legislação relacionada</label>
@@ -1306,7 +1330,7 @@ function renderFicha(){
              oninput="if(!compondo(event)) buscarNorma(this.value)" autocomplete="off">
       ${buscaLegis.length >= 3 ? `
         <div data-rolagem="buscaLegis" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
-          ${resultadosNorma().length ? resultadosNorma().slice(0,25).map(d => `
+          ${resultadosNorma(buscaLegis).length ? resultadosNorma(buscaLegis).slice(0,25).map(d => `
             <div class="termo" style="cursor:pointer${d.suspeito?';opacity:.62':''}" onclick="addLegis(${arg(d.id)})">
               <span style="flex:1">${esc(d.titulo)}</span>
               ${d.suspeito ? '<span class="badge" style="background:var(--bad-bg);color:var(--bad)">registro sem documento</span>' : ''}
@@ -1812,8 +1836,13 @@ function renderRel(r){
   const link = dOutro && dOutro.public_url
     ? ` <a href="${esc(dOutro.public_url)}" target="_blank" rel="noopener"
            title="abrir no Memória SPU, em aba nova" style="color:var(--accent);font-size:12px">abrir ↗</a>` : '';
-  return `<div class="rel ${r.confianca < 0.7 ? 'ocr':''}">
+  /* Rejeitada em sessão anterior e ainda sem decisão nesta: aparece apagada e dizendo o
+     que é. O botão "confirma" é o caminho de volta — a gravação faz o UPDATE de status
+     como em qualquer outra, então reabrir não precisa de nada novo. */
+  const jaRejeitada = r.status === 'rejeitada' && !d;
+  return `<div class="rel ${r.confianca < 0.7 ? 'ocr':''} ${jaRejeitada ? 'rej':''}">
     <div class="cab">${seletor}
+      ${jaRejeitada ? '<span class="marca" title="confirme para trazê-la de volta">rejeitada antes</span>' : ''}
       <span class="acoes">
         <button class="sim ${d==='confirmada'?'on':''}" onclick="decidirRel(${arg(r.id)}, ${arg("confirmada")})">confirma</button>
         <button class="nao ${d==='rejeitada'?'on':''}" onclick="decidirRel(${arg(r.id)}, ${arg("rejeitada")})">não</button>
@@ -1822,6 +1851,104 @@ function renderRel(r){
     <div class="ev">“${esc((r.evidencia||'').slice(0,240))}”</div>
   </div>`;
 }
+/* ---------- relacionar à mão ----------
+
+   O que esta tela produz é uma relação de verdade, gravada em `relacoes_norma` com o tipo
+   escolhido — não uma linha solta em "Legislação relacionada". A diferença importa: só a
+   relação tipada alimenta `ato_revogacao`, `ato_alteracao` e `norma_regulamentacao` no
+   export, e só ela satisfaz a exigência da retificação.
+
+   A gravação é imediata, com `status = 'pendente'` e já confirmada nesta sessão. Assim a
+   relação sobrevive se a pessoa fechar a ficha sem concluir, e segue o mesmo caminho das
+   detectadas na hora de salvar — nenhuma regra nova no gravador. */
+const SENTIDOS = {
+  ativa:   { altera:'altera', revoga:'revoga', revoga_parcialmente:'revoga em parte',
+             regulamenta:'regulamenta', retifica:'retifica' },
+  passiva: { altera:'foi alterada por', revoga:'foi revogada por',
+             revoga_parcialmente:'foi revogada em parte por',
+             regulamenta:'é regulamentada por', retifica:'foi retificada por' }
+};
+function blocoRelManual(){
+  const OPCOES = { revoga:'revoga (integral)', revoga_parcialmente:'revoga em parte',
+                   altera:'altera', regulamenta:'regulamenta', retifica:'retifica' };
+  const achados = resultadosRelNorma();
+  const aberto = relManAberto === null
+    ? (ehRetificacao() && !relsConfirmaveis()) : relManAberto;
+  return `<details class="relman" ${aberto ? 'open' : ''} ontoggle="relManAberto = this.open">
+    <summary>Relacionar à mão — quando a detecção não achou</summary>
+    <div class="ajuda" style="margin:8px 0">Vale para o que o extrator não enxerga: ato sem
+      ementa e sem Art. 1º, texto em OCR, página de Diário com vários atos.</div>
+    <div class="relman-linha">
+      <select onchange="setRelSentido(this.value)" title="quem faz o quê">
+        <option value="ativa" ${relNovo.sentido==='ativa'?'selected':''}>esta norma…</option>
+        <option value="passiva" ${relNovo.sentido==='passiva'?'selected':''}>esta norma foi…</option>
+      </select>
+      <select onchange="setRelTipo(this.value)">
+        ${Object.keys(OPCOES).map(k => `<option value="${k}"${k===relNovo.tipo?' selected':''}>
+          ${esc(SENTIDOS[relNovo.sentido][k] || OPCOES[k])}</option>`).join('')}
+      </select>
+    </div>
+    <input type="text" id="buscaRelNorma" value="${esc(buscaRel)}" autocomplete="off"
+           placeholder="digite parte do título ou o número da outra norma"
+           oninput="if(!compondo(event)) buscarRelNorma(this.value)">
+    ${buscaRel.trim().length >= 3 ? `
+      <div data-rolagem="buscaRel" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
+        ${achados.length ? achados.slice(0,25).map(d => `
+          <div class="termo" style="cursor:pointer${d.suspeito?';opacity:.62':''}" onclick="addRelManual(${arg(d.id)})">
+            <span style="flex:1">${esc(d.titulo)}</span>
+            ${d.suspeito ? '<span class="badge" style="background:var(--bad-bg);color:var(--bad)">registro sem documento</span>' : ''}
+            <span class="cnt">${d.item_id_tainacan ? '#'+d.item_id_tainacan : 'sem id'}</span>
+          </div>`).join('')
+        : '<div class="vazio" style="padding:8px">Nenhuma norma do acervo casa com essa busca.</div>'}
+      </div>` : ''}
+  </details>`;
+}
+/* Há alguma relação que esta ficha ainda possa confirmar? Serve só para abrir o bloco
+   sozinho quando não há — caso da retificação sem detecção, que é exatamente quando a
+   pessoa precisa dele e não tem como adivinhar que existe. */
+function relsConfirmaveis(){ return relAtual.some(r => r.status === 'pendente'); }
+function setRelTipo(v){ relNovo.tipo = v; renderFicha(); }
+function setRelSentido(v){ relNovo.sentido = v; renderFicha(); }
+function resultadosRelNorma(){ return resultadosNorma(buscaRel); }
+function buscarRelNorma(v){
+  buscaRel = v;
+  const f = document.getElementById('ficha'), pos = f.scrollTop;
+  renderFicha(); f.scrollTop = pos;
+  const cx = document.getElementById('buscaRelNorma');
+  if (cx) { cx.focus(); cx.setSelectionRange(v.length, v.length); }
+}
+async function addRelManual(docId){
+  if (relSalvando) return;
+  const d = docsPorId[docId];
+  if (!d) return;
+  const souOrigem = relNovo.sentido === 'ativa';
+  const repetida = relAtual.some(r =>
+    tipoDe(r) === relNovo.tipo &&
+    (souOrigem ? (r.origem_id === docAtual.id && r.destino_id === docId)
+               : (r.destino_id === docAtual.id && r.origem_id === docId)));
+  if (repetida) { alert('Essa relação já está na lista acima.'); return; }
+  relSalvando = true;
+  const { data, error } = await sb.from('relacoes_norma').insert({
+    colecao_id: colecaoId,
+    origem_id:  souOrigem ? docAtual.id : docId,
+    destino_id: souOrigem ? docId : docAtual.id,
+    tipo: relNovo.tipo, status: 'pendente', origem_deteccao: 'manual', confianca: 1,
+    evidencia: 'Relação informada à mão por ' + (usuario.nome || usuario.id) + ' em ' +
+               new Date().toLocaleDateString('pt-BR') + ' — a detecção automática não a encontrou.'
+  }).select('*, destino:destino_id(titulo,tipo_norma), origem:origem_id(titulo,tipo_norma)');
+  relSalvando = false;
+  // ler de volta é o que prova a gravação: bloqueio de RLS devolve 204 sem escrever
+  if (error || !(data || []).length) {
+    alert('Não deu para gravar a relação.\n\n' +
+          ((error && error.message) || 'O banco não devolveu a linha gravada.'));
+    return;
+  }
+  relAtual.push(data[0]);
+  decisoesRel[data[0].id] = 'confirmada';
+  buscaRel = '';
+  renderFicha();
+}
+
 function ehRetificacao(){
   return !!docAtual && (docAtual.tipo_norma || '').toLowerCase().startsWith('retifica');
 }
@@ -1925,8 +2052,8 @@ function melhorDoGrupo(a, b){
    Cobrar o ponto de milhar do lado de quem busca é cobrar que adivinhe a grafia. */
 function semMilhar(t){ return (t || '').replace(/(\d)[.\s](?=\d{3}\b)/g, '$1'); }
 
-function resultadosNorma(){
-  const q = norm(buscaLegis.trim());
+function resultadosNorma(termo){
+  const q = norm((termo || '').trim());
   if (q.length < 3) return [];
   const qn = semMilhar(q);
   const achados = acervo.filter(d => {
@@ -2067,7 +2194,8 @@ async function salvarUmaVez(modo){
                                             decisoesRel[r.id] === 'confirmada');
     if (!temRetifica) {
       alert('Falta dizer qual norma esta retificação corrige.\n\n' +
-            'Confirme a relação do tipo "retifica" em Relações entre normas. ' +
+            'Em Relações entre normas, confirme a relação do tipo "retifica" — ou, se não ' +
+            'houver nenhuma detectada, abra "Relacionar à mão" e aponte a norma corrigida.\n\n' +
             'Como a retificação não recebe assunto nem palavra-chave, essa relação é o ' +
             'único vínculo dela com o acervo — sem ela, a norma fica solta.');
       return;
