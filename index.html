@@ -241,6 +241,8 @@ select.tp:hover { border-color:var(--terra); }
             <option value="antiga">Ano — mais antigas primeiro</option>
             <option value="fila">Ordem da fila</option>
           </select>
+          <button class="b sec" onclick="abrirPainel()"
+                  title="andamento do trabalho, dúvidas e observações">Painel</button>
           <button class="b sec" onclick="exportarExcel()"
                   title="planilha para a equipe do repositório — a preparação do CSV de carga é feita por eles">Exportar Excel</button>
                     <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
@@ -264,6 +266,15 @@ select.tp:hover { border-color:var(--terra); }
         </div>
         <div id="filaBox"><div class="vazio">carregando…</div></div>
       </div>
+    </div>
+
+    <div id="telaPainel" class="hidden">
+      <div class="barra">
+        <button class="b sec" onclick="fecharPainel()">← voltar para a fila</button>
+        <span style="font-family:Fraunces,serif;font-weight:600;font-size:16px">Painel</span>
+        <span id="painelQuando" style="margin-left:auto;color:var(--muted);font-size:12.5px"></span>
+      </div>
+      <div id="painelBox"><div class="card"><div class="vazio">carregando…</div></div></div>
     </div>
 
     <div id="telaDoc" class="hidden">
@@ -893,6 +904,8 @@ async function abrir(id){
   relAtual = rels || [];
 
   document.getElementById('telaFila').classList.add('hidden');
+  // abrir pode vir do painel (clique numa dúvida): sem isto as duas telas ficariam juntas
+  document.getElementById('telaPainel').classList.add('hidden');
   document.getElementById('telaDoc').classList.remove('hidden');
   document.getElementById('docTitulo').textContent = d.titulo;
   // o botão de compilado só aparece quando há do que compilar: alteração registrada
@@ -964,6 +977,239 @@ async function voltar(){
   if (id && !manter) await soltarTrava(id);
   carregarFila();
 }
+/* ---------- painel ----------
+   Existe porque as mesmas perguntas chegavam ao Juarez por mensagem: quanto falta, quantos
+   dias, quem está fazendo o quê, e o que as pessoas anotaram como dúvida.
+
+   Uma regra de desenho, decidida com ele em 11/11/2026 e que não é detalhe de layout:
+   o painel mostra QUANTO cada pessoa fez, e nunca em quanto tempo. O trabalho é
+   voluntário, feito por gente de áreas diferentes, e uma Lei de 280 mil caracteres não é
+   uma portaria de designação — medir velocidade por pessoa transformaria ajuda em
+   cobrança. Por isso: ordem alfabética (não ranking), nada de fichas por dia ou por hora,
+   e o ritmo só aparece no total da equipe, que é o que responde "quanto falta". */
+let painelDados = null;
+
+async function abrirPainel(){
+  document.getElementById('telaFila').classList.add('hidden');
+  document.getElementById('telaPainel').classList.remove('hidden');
+  document.getElementById('painelBox').innerHTML = '<div class="card"><div class="vazio">carregando…</div></div>';
+  await carregarPainel();
+}
+function fecharPainel(){
+  document.getElementById('telaPainel').classList.add('hidden');
+  document.getElementById('telaFila').classList.remove('hidden');
+}
+
+async function carregarPainel(){
+  // As mesmas tabelas que a fila e o export já leem — nada de novo na RLS.
+  const [rDocs, rEtapas] = await Promise.all([
+    sb.from('documentos')
+      .select('id,titulo,lote,status,em_duvida,duvida_nota,item_id_tainacan')
+      .eq('colecao_id', colecaoId).eq('fora_de_escopo', false).limit(1000),
+    sb.from('etapas_revisao')
+      .select('documento_id,usuario_id,criado_em,patrimonial,motivo_recusa,campos,termos').limit(2000),
+  ]);
+  const conta = async (tabela, filtros) => {
+    let q = sb.from(tabela).select('id', { count:'exact', head:true });
+    (filtros||[]).forEach(f => { q = q.eq(f[0], f[1]); });
+    const { count } = await q; return count || 0;
+  };
+  const [relPend, relConf, termosProv] = await Promise.all([
+    conta('relacoes_norma', [['status','pendente']]),
+    conta('relacoes_norma', [['status','confirmada']]),
+    conta('taxonomia', [['provisoria', true], ['ativo', true]]),
+  ]);
+  painelDados = { docs: rDocs.data || [], etapas: rEtapas.data || [],
+                  relPend, relConf, termosProv };
+  document.getElementById('painelQuando').textContent =
+    'dados de ' + new Date().toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  renderPainel(painelDados);
+}
+
+/* Semana ISO (segunda a domingo) do instante dado, como chave ordenável 'aaaa-Snn'. */
+function semanaDe(iso){
+  const d = new Date(iso); if (isNaN(d)) return null;
+  const q = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  q.setUTCDate(q.getUTCDate() + 4 - (q.getUTCDay() || 7));
+  const ano = q.getUTCFullYear();
+  const s = Math.ceil(((q - Date.UTC(ano, 0, 1)) / 86400000 + 1) / 7);
+  return ano + '-S' + String(s).padStart(2, '0');
+}
+
+/* Quem atuou em quantas normas, em ORDEM ALFABÉTICA. Separada do render e recebendo a
+   função de nome por parâmetro para poder ser testada sem tela e sem banco — e porque a
+   ordem é uma decisão, não um detalhe: ordenar por volume faria desta tabela um ranking
+   de trabalho voluntário. Há teste que reprova se alguém trocar a ordenação. */
+function contribuicoes(etapas, nome){
+  const pessoas = {};
+  (etapas || []).forEach(e => {
+    const n = nome(e.usuario_id);
+    (pessoas[n] = pessoas[n] || new Set()).add(e.documento_id);
+  });
+  return Object.keys(pessoas).sort((a,b) => a.localeCompare(b, 'pt-BR'))
+    .map(n => ({ nome: n, normas: pessoas[n].size }));
+}
+
+function renderPainel(dados){
+  const { docs, etapas, relPend, relConf, termosProv } = dados || painelDados;
+  const porDoc = {};        // ficha mais recente de cada norma
+  const primeira = {};      // e a PRIMEIRA, que é a que marca quando a norma foi indexada
+  etapas.forEach(e => {
+    const a = porDoc[e.documento_id];
+    if (!a || a.criado_em < e.criado_em) porDoc[e.documento_id] = e;
+    const p = primeira[e.documento_id];
+    if (!p || p.criado_em > e.criado_em) primeira[e.documento_id] = e;
+  });
+  const emLote = docs.filter(d => d.lote);
+  const indexadas = emLote.filter(d => d.status === 'indexado');
+  const faltam = emLote.length - indexadas.length;
+  const porId = {}; docs.forEach(d => porId[d.id] = d);
+
+  // --- ritmo: normas indexadas por semana, pela PRIMEIRA ficha de cada uma. Contar todas
+  // as etapas inflaria o ritmo com as correções, que são trabalho mas não avançam a fila.
+  const porSemana = {};
+  Object.values(primeira).forEach(e => {
+    const s = semanaDe(e.criado_em); if (s) porSemana[s] = (porSemana[s] || 0) + 1;
+  });
+  const semanas = Object.keys(porSemana).sort().slice(-8);
+  const maxSem = Math.max(1, ...semanas.map(s => porSemana[s]));
+  const corte = Date.now() - 28 * 86400000;
+  const ult28 = Object.values(primeira).filter(e => new Date(e.criado_em).getTime() >= corte).length;
+  const porSem = ult28 / 4;
+  const projecao = porSem >= 0.5
+    ? `No ritmo das últimas 4 semanas — <b>${porSem.toFixed(1)} normas por semana</b> —, as
+       ${faltam} que faltam levam cerca de <b>${Math.ceil(faltam / porSem)} semanas</b>.`
+    : `Menos de uma norma por semana nas últimas 4 semanas: não há ritmo recente que sirva
+       para projetar prazo.`;
+
+  // --- por pessoa: normas em que atuou. Ordem ALFABÉTICA, de propósito (ver acima).
+  const quem = contribuicoes(etapas, nomeDe);
+
+  // --- dúvidas e observações
+  const duvidas = docs.filter(d => d.em_duvida)
+    .sort((a,b) => (a.titulo||'').localeCompare(b.titulo||'', 'pt-BR'));
+  const obs = Object.values(porDoc)
+    .filter(e => (e.campos || {}).observacoes && porId[e.documento_id])
+    .sort((a,b) => (b.criado_em||'').localeCompare(a.criado_em||''));
+
+  // --- triagem
+  const recusadas = Object.values(porDoc).filter(e => e.patrimonial === false);
+
+  // --- vocabulário: taxa de aceite das sugestões automáticas
+  let sugeridas = 0, aceitas = 0, aMao = 0;
+  Object.values(porDoc).forEach(e => (e.termos || []).forEach(t => {
+    if (t.sugestao_automatica) { sugeridas++; if (t.decisao === 'aceito') aceitas++; }
+    else aMao++;
+  }));
+
+  const linhaLote = l => {
+    const t = emLote.filter(d => d.lote === l), f = t.filter(d => d.status === 'indexado').length;
+    const pct = t.length ? Math.round(100 * f / t.length) : 0;
+    return `<tr><td>Lote ${esc(l)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${f}/${t.length}</td>
+      <td style="width:50%"><div style="background:var(--line);border-radius:6px;height:10px">
+        <div style="width:${pct}%;background:var(--ok,#2e7d32);height:10px;border-radius:6px"></div></div></td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${pct}%</td></tr>`;
+  };
+  const lotes = [...new Set(emLote.map(d => d.lote))].sort();
+
+  document.getElementById('painelBox').innerHTML = `
+    <div class="card">
+      <h2 class="sec">Andamento</h2>
+      <div style="display:flex;gap:28px;flex-wrap:wrap;margin-bottom:12px">
+        <div><div style="font-size:30px;font-family:Fraunces,serif">${indexadas.length}</div>
+             <div class="ajuda">normas indexadas</div></div>
+        <div><div style="font-size:30px;font-family:Fraunces,serif">${faltam}</div>
+             <div class="ajuda">na fila</div></div>
+        <div><div style="font-size:30px;font-family:Fraunces,serif">${emLote.length}</div>
+             <div class="ajuda">no total dos lotes liberados</div></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">${lotes.map(linhaLote).join('')}</table>
+      <div class="ajuda" style="margin-top:10px">${projecao}</div>
+    </div>
+
+    <div class="card">
+      <h2 class="sec">Ritmo da equipe</h2>
+      ${semanas.length ? `<div style="display:flex;align-items:flex-end;gap:10px;height:90px">
+        ${semanas.map(s => `<div style="flex:1;text-align:center">
+          <div style="font-size:12px;color:var(--muted)">${porSemana[s]}</div>
+          <div title="semana ${esc(s)}" style="background:var(--ok,#2e7d32);border-radius:4px 4px 0 0;
+               height:${Math.round(60 * porSemana[s] / maxSem)}px"></div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:3px">${esc(s.slice(5))}</div>
+        </div>`).join('')}
+      </div>` : '<div class="vazio">nenhuma ficha gravada ainda</div>'}
+      <div class="ajuda" style="margin-top:8px">Normas indexadas por semana, pelas últimas 8.
+        Conta a primeira ficha de cada norma — correção é trabalho, mas não avança a fila.</div>
+    </div>
+
+    <div class="card">
+      <h2 class="sec">Quem contribuiu</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+        ${quem.map(p => `<tr><td style="padding:3px 0">${esc(p.nome)}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums">${p.normas}</td></tr>`).join('')
+          || '<tr><td class="vazio">ninguém ainda</td></tr>'}
+      </table>
+      <div class="ajuda" style="margin-top:8px">Normas em que a pessoa atuou, em ordem alfabética.
+        <b>Não é medida de velocidade nem de produtividade</b>: o trabalho é voluntário, vem de
+        áreas diferentes, e uma lei de duzentas páginas não se compara a uma portaria de uma.</div>
+    </div>
+
+    <div class="card">
+      <h2 class="sec">Dúvidas — ${duvidas.length}</h2>
+      ${duvidas.length ? duvidas.map(d => `
+        <div style="border-top:1px solid var(--line);padding:8px 0">
+          <a class="b sec" style="padding:2px 9px;font-size:12.5px;cursor:pointer" onclick="abrir(${arg(d.id)})">abrir</a>
+          <b style="margin-left:8px">${esc(d.titulo || '(sem título)')}</b>
+          ${d.lote ? `<span class="pill fim">lote ${esc(d.lote)}</span>` : ''}
+          <div class="ajuda" style="margin-top:4px">${d.duvida_nota
+            ? esc(d.duvida_nota)
+            : '<i>marcada com dúvida, sem texto — o campo da dúvida passou a existir em 11/11/2026</i>'}</div>
+        </div>`).join('') : '<div class="vazio">nenhuma dúvida marcada</div>'}
+    </div>
+
+    <div class="card">
+      <h2 class="sec">Observações — ${obs.length}</h2>
+      ${obs.length ? obs.slice(0, 40).map(e => `
+        <div style="border-top:1px solid var(--line);padding:8px 0">
+          <a class="b sec" style="padding:2px 9px;font-size:12.5px;cursor:pointer" onclick="abrir(${arg(e.documento_id)})">abrir</a>
+          <b style="margin-left:8px">${esc((porId[e.documento_id]||{}).titulo || '')}</b>
+          <span class="ajuda">· ${esc(nomeDe(e.usuario_id))} · ${dataCurta(e.criado_em)}</span>
+          <div class="ajuda" style="margin-top:4px">${esc(e.campos.observacoes)}</div>
+        </div>`).join('') : '<div class="vazio">nenhuma observação escrita</div>'}
+      ${obs.length > 40 ? `<div class="ajuda">… e mais ${obs.length - 40}. Todas saem na planilha.</div>` : ''}
+    </div>
+
+    <div class="card">
+      <h2 class="sec">Triagem — ${recusadas.length} recusadas</h2>
+      ${recusadas.length ? recusadas.slice(0, 30).map(e => `
+        <div style="border-top:1px solid var(--line);padding:6px 0;font-size:13px">
+          <b>${esc((porId[e.documento_id]||{}).titulo || '')}</b>
+          <div class="ajuda">${esc(motivoDaRecusa(e) || 'sem motivo escrito')}</div>
+        </div>`).join('') : '<div class="vazio">nenhuma norma recusada</div>'}
+      <div class="ajuda" style="margin-top:8px">Normas que a equipe marcou como não patrimoniais.
+        Elas saem da indexação, mas continuam no acervo.</div>
+    </div>
+
+    <div class="card">
+      <h2 class="sec">Vocabulário e relações</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+        <tr><td style="padding:3px 0">Sugestões automáticas aceitas</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums">${aceitas} de ${sugeridas}${
+              sugeridas ? ` (${Math.round(100*aceitas/sugeridas)}%)` : ''}</td></tr>
+        <tr><td style="padding:3px 0">Termos escolhidos à mão pela equipe</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums">${aMao}</td></tr>
+        <tr><td style="padding:3px 0">Termos propostos esperando curadoria</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums">${termosProv}</td></tr>
+        <tr><td style="padding:3px 0">Relações confirmadas</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums">${relConf}</td></tr>
+        <tr><td style="padding:3px 0">Relações esperando confirmação</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums">${relPend}</td></tr>
+      </table>
+      <div class="ajuda" style="margin-top:8px">A taxa de aceite é a medida de calibração do
+        sugeridor. Em 09/11/2026 ela era de 12,6%; a ordenação que entrou em 11/11 deve subi-la.</div>
+    </div>
+  `;
+}
+
 async function devolverAFila(){
   const id = docAtual && docAtual.id;
   if (!id) return;
@@ -1399,6 +1645,11 @@ function renderFicha(){
       <label><input type="checkbox" ${docAtual.em_duvida?'checked':''} onchange="setDuvida(this.checked)">
       Tenho dúvida neste item</label>
       <div class="ajuda">Equivale à linha amarela da planilha: distingue "não preenchi por dúvida" de "ainda não chegou a vez".</div>
+      ${docAtual.em_duvida ? `
+        <textarea rows="2" style="margin-top:6px" placeholder="qual é a dúvida? quem recebe a planilha precisa saber o que resolver"
+                  onchange="setDuvidaNota(this.value)">${esc(docAtual.duvida_nota||'')}</textarea>
+        <div class="ajuda">Vai para a planilha, na coluna "Dúvida — qual". Sem o texto, a dúvida chega como um "sim" que ninguém sabe atender — foi o que aconteceu com a recusa sem motivo, em setembro.</div>`
+        : ''}
     </div>
 
     `;
@@ -1815,6 +2066,25 @@ async function setDuvida(v){
     .eq('id', docAtual.id).select('id');
   if (!gravou(resp, 'a marcação de dúvida', { exigirLinhas: true })) {
     docAtual.em_duvida = anterior;   // desfaz na tela: o clique pareceu funcionar e não gravou
+  }
+  // re-renderiza nos dois casos: marcar abre o campo do texto, desmarcar o esconde.
+  // Desmarcar NÃO apaga `duvida_nota` — o texto fica guardado para quem remarcar, e o
+  // export só o mostra quando a dúvida está marcada.
+  renderFicha();
+}
+
+/* O texto da dúvida. `duvida_nota` existia na tabela desde o começo e NADA escrevia nela:
+   a dúvida era um sinalizador sem conteúdo, e chegava à planilha como um "sim" que ninguém
+   sabia atender. É a mesma classe de problema da recusa sem motivo, de 14/09/2026.
+   Grava no `onchange` (ao sair do campo), não a cada tecla. */
+async function setDuvidaNota(v){
+  const anterior = docAtual.duvida_nota;
+  docAtual.duvida_nota = v;
+  const resp = await sb.from('documentos')
+    .update({ duvida_nota: v, duvida_por: usuario.id, duvida_em: new Date().toISOString() })
+    .eq('id', docAtual.id).select('id');
+  if (!gravou(resp, 'o texto da dúvida', { exigirLinhas: true })) {
+    docAtual.duvida_nota = anterior;
     renderFicha();
   }
 }
@@ -2795,8 +3065,11 @@ async function exportarExcel(){
      dentro de `campos`. Medido em 14/09/2026: 16 recusas, 7 com motivo escrito, 0 no Excel. */
   const { data: etapas } = await sb.from('etapas_revisao')
     .select('documento_id,estagio,campos,termos,criado_em,usuario_id,patrimonial,motivo_recusa').limit(2000);
+  // `em_duvida` e `duvida_nota` entram aqui pelo mesmo motivo que `patrimonial` entrou em
+  // setembro: coluna que não vem no select sai sempre vazia na planilha, e quem lê conclui
+  // que ninguém escreveu nada.
   const { data: docs } = await sb.from('documentos')
-    .select('id,item_id_tainacan,titulo,lote').eq('colecao_id', colecaoId).limit(1000);
+    .select('id,item_id_tainacan,titulo,lote,em_duvida,duvida_nota').eq('colecao_id', colecaoId).limit(1000);
   const { data: props } = await sb.from('v_propostas_cadastro_vigentes')
     .select('documento_id,campo,valor_atual,valor_proposto,usuario_id,criado_em');
 
@@ -2810,10 +3083,17 @@ async function exportarExcel(){
   const colsIdx = ['special_item_id','Lote','Título','Assunto','assunto_taxonomia_2','assunto_taxonomia_3',
     'regime_destinacao','regime_aquisicao','Palavra-chave','Situação da Norma','data_inicio_vigencia',
     'Ato de Revogação','Revogado em','Norma de regulamentação','Ato de alteração','Legislação Relacionada',
-    'Não é norma patrimonial','Motivo da recusa','Revisado por','Revisado em'];
+    'Não é norma patrimonial','Motivo da recusa','Observações','Marcada com dúvida','Dúvida — qual',
+    'Revisado por','Revisado em'];
   const idx = [colsIdx];
   (docs||[]).forEach(d => {
-    const e = porDoc[d.id]; if (!e) return;
+    /* Entra quem tem ficha E TAMBÉM quem só está marcado com dúvida. A marcação de dúvida
+       grava direto em `documentos` e não depende de salvar a ficha — exigir etapa deixaria
+       de fora exatamente a norma que alguém parou de indexar porque tinha uma dúvida, que
+       é a que mais precisa chegar a quem pode resolvê-la. Linha sem ficha sai com as
+       colunas de indexação vazias, que é o retrato fiel: ninguém indexou. */
+    const e = porDoc[d.id] || (d.em_duvida ? { campos: {}, termos: [] } : null);
+    if (!e) return;
     const c = e.campos || {}, cam = c.assuntos_caminho || [];
     const pcs = (e.termos||[]).filter(t => t.decisao !== 'rejeitado').map(t => t.termo).join('||');
     idx.push([ d.item_id_tainacan||'', d.lote||'', d.titulo||'',
@@ -2821,7 +3101,14 @@ async function exportarExcel(){
       c.situacao_norma||'', c.data_inicio_vigencia||'', c.ato_revogacao||'', c.revogado_em||'',
       c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'',
       e.patrimonial === false ? 'sim' : '', motivoDaRecusa(e),
-      nomeDe(e.usuario_id), dataCurta(e.criado_em) ]);
+      // a observação vive na ficha (etapas_revisao.campos); a dúvida, no documento
+      c.observacoes || '', d.em_duvida ? 'sim' : '',
+      // o texto só sai com a dúvida marcada: desmarcar não apaga a nota, e exibi-la assim
+      // faria a planilha pedir solução para uma dúvida que a pessoa já retirou
+      d.em_duvida ? (d.duvida_nota || '') : '',
+      // linha sem ficha não tem revisor: `nomeDe(undefined)` diria "autor não identificado",
+      // que afirma que alguém revisou e não se sabe quem — o contrário do que aconteceu
+      e.usuario_id ? nomeDe(e.usuario_id) : '', dataCurta(e.criado_em) ]);
   });
 
   const corr = [['special_item_id','Título','Campo','Valor atual','Valor proposto','Proposto por','Proposto em']];
