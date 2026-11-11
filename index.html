@@ -319,7 +319,7 @@ let acervo = [], docsPorId = {}, legisManuais = [], buscaLegis = '';
    que não tem nem uma coisa nem outra — retificação de DOU é o caso puro, e ainda
    vem com as letras espaçadas ("R E T I F I C AÇ ÃO"). Sem um caminho manual, a
    relação obrigatória da retificação era impossível de cumprir pela tela. */
-let buscaRel = '', relNovo = { tipo: 'retifica', sentido: 'ativa' }, relSalvando = false;
+let buscaRel = '', relNovo = { tipo: 'revoga', sentido: 'ativa' }, relSalvando = false;
 /* null = decide sozinho (abre quando não há o que confirmar); true/false = o que a
    pessoa escolheu. Sem isso o bloco fecharia a cada tecla, porque a ficha é
    redesenhada inteira a cada caractere digitado na busca. */
@@ -395,8 +395,19 @@ const TIPOS_REL = {
   suspende:            { opcao:'suspende',          ativa:'suspende',        passiva:'suspensa' },
   altera:              { opcao:'altera',            ativa:'altera',          passiva:'alterada' },
   regulamenta:         { opcao:'regulamenta',       ativa:'regulamenta',     passiva:'regulamentada' },
-  retifica:            { opcao:'retifica',          ativa:'retifica',        passiva:'retificada' }
+  /* `retifica` deixou de ser oferecido em 11/11/2026: a equipe do repositório decidiu que
+     a norma retificadora passa a ser ANEXO da norma retificada, e não item próprio do
+     acervo. Sem item, não há o que relacionar.
+     Continua aqui, e isso não é descuido: 7 relações `retifica` já existem no banco e a
+     lista de exibição aceita qualquer tipo de propósito. Apagar a entrada faria essas
+     relações aparecerem sem rótulo na ficha — o tipo sumiria da tela por esquecimento,
+     que é exatamente o erro cometido quando `revoga_parcialmente` surgiu. `oculto` tira
+     dos seletores e mantém legível o que já está gravado. */
+  retifica:            { opcao:'retifica',          ativa:'retifica',        passiva:'retificada',
+                         oculto:true }
 };
+// os tipos que a pessoa pode ESCOLHER; os ocultos continuam sendo exibidos quando existem
+function tiposOferecidos(){ return Object.keys(TIPOS_REL).filter(k => !TIPOS_REL[k].oculto); }
 /* Rótulos do fluxo antigo, de dois estágios. Mantidos só para as etapas já gravadas com
    esses valores continuarem legíveis — desde 01/09/2026 grava-se sempre `esp1` e a tela
    não fala mais em "Especialista 1 e 2". */
@@ -834,7 +845,7 @@ async function abrir(id){
   selAssuntos = []; selPalavras = []; decisoesRel = {}; tiposRel = {}; campos = {};
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
   legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
-  buscaRel = ''; relManAberto = null; relNovo = { tipo: 'retifica', sentido: 'ativa' };
+  buscaRel = ''; relManAberto = null; relNovo = { tipo: 'revoga', sentido: 'ativa' };
   sugMaisAberto = false;    // norma nova começa pelas mais prováveis, não pelo varal
   propostas = {}; linhaPlanilha = null;
   precisaCompilar = d.precisa_compilar; compilada = d.compilada; linkDocx = null;
@@ -1148,9 +1159,7 @@ function renderPainel(dados){
           <td style="text-align:right;font-variant-numeric:tabular-nums">${p.normas}</td></tr>`).join('')
           || '<tr><td class="vazio">ninguém ainda</td></tr>'}
       </table>
-      <div class="ajuda" style="margin-top:8px">Normas em que a pessoa atuou, em ordem alfabética.
-        <b>Não é medida de velocidade nem de produtividade</b>: o trabalho é voluntário, vem de
-        áreas diferentes, e uma lei de duzentas páginas não se compara a uma portaria de uma.</div>
+      <div class="ajuda" style="margin-top:8px">Normas em que a pessoa atuou, em ordem alfabética.</div>
     </div>
 
     <div class="card">
@@ -1579,10 +1588,12 @@ function renderFicha(){
 `;
   const avisoRetificacao = `
     <h3 class="blo" style="margin-top:0">Assunto e palavras-chave</h3>
-    <div class="aviso">Retificação não recebe assunto nem palavra-chave. Este ato não tem
+    <div class="aviso">Retificação não recebe assunto nem palavra-chave: este ato não tem
       objeto próprio — ele corrige outra norma, e é ela que trata da matéria.
-      <br><br><b>O que esta ficha precisa</b> é a relação com a norma retificada, logo
-      abaixo em <i>Relações entre normas</i>. Sem ela a retificação não se liga a nada.</div>`;
+      <br><br>Em 11/11/2026 a equipe do repositório decidiu que a norma retificadora passa
+      a ser <b>anexo da norma retificada</b>, e não item próprio do acervo. Enquanto este
+      item existir, ele pode ser indexado como está; não é mais preciso apontar a norma
+      corrigida para salvar.</div>`;
 
   const miolo = (ehRetificacao() ? avisoRetificacao : tematico) + `
     <h3 class="blo">Situação e vigência</h3>
@@ -2144,7 +2155,7 @@ function renderRel(r){
   const rotulo = k => (TIPOS_REL[k] || {}).opcao || k;
   const seletor = `<select class="tp" onchange="corrigirTipoRel(${arg(r.id)}, this.value)"
         title="o tipo sugerido pode estar errado — corrija aqui em vez de rejeitar">` +
-    Object.keys(TIPOS_REL).map(k => `<option value="${k}"${k===tEfetivo?' selected':''}>` +
+    [...new Set([...tiposOferecidos(), tEfetivo])].map(k => `<option value="${k}"${k===tEfetivo?' selected':''}>` +
       esc(rotulo(k)) + '</option>').join('') + '</select>' +
     (corrigido ? ` <span class="cnt" title="sugerido: ${esc(rotulo(r.tipo))}">corrigido</span>` : '');
   // link para abrir a norma relacionada no Memória SPU, em aba nova: conferir sem perder
@@ -2197,7 +2208,7 @@ function blocoRelManual(){
         <option value="passiva" ${relNovo.sentido==='passiva'?'selected':''}>esta norma foi…</option>
       </select>
       <select onchange="setRelTipo(this.value)">
-        ${Object.keys(TIPOS_REL).map(k => `<option value="${k}"${k===relNovo.tipo?' selected':''}>
+        ${tiposOferecidos().map(k => `<option value="${k}"${k===relNovo.tipo?' selected':''}>
           ${esc(rotuloSentido(k, relNovo.sentido))}</option>`).join('')}
       </select>
     </div>
@@ -2507,22 +2518,12 @@ async function salvarUmaVez(modo){
     voltar(); return;
   }
 
-  if (ehRetificacao()) {
-    /* A relação com a norma retificada é o ÚNICO vínculo que a retificação tem, agora que
-       ela não recebe assunto nem palavra-chave. Por isso é bloqueio e não pergunta: uma
-       retificação gravada sem ela fica órfã no acervo, e órfã não se descobre — some em
-       silêncio, e ninguém vai auditar o que não aparece em lugar nenhum. */
-    const temRetifica = relAtual.some(r => tipoDe(r) === 'retifica' &&
-                                            decisoesRel[r.id] === 'confirmada');
-    if (!temRetifica) {
-      alert('Falta dizer qual norma esta retificação corrige.\n\n' +
-            'Em Relações entre normas, confirme a relação do tipo "retifica" — ou, se não ' +
-            'houver nenhuma detectada, abra "Relacionar à mão" e aponte a norma corrigida.\n\n' +
-            'Como a retificação não recebe assunto nem palavra-chave, essa relação é o ' +
-            'único vínculo dela com o acervo — sem ela, a norma fica solta.');
-      return;
-    }
-  } else if (!selAssuntos.length) {
+  /* A exigência da relação `retifica` saiu em 11/11/2026, junto com a decisão da equipe do
+     repositório: a norma retificadora passa a ser ANEXO da norma retificada, e não item
+     próprio do acervo. Deixa de haver o que vincular — e manter o bloqueio obrigaria a
+     criar uma relação para um item que está saindo de cena, que é trabalho jogado fora.
+     A regra que FICA é a outra: retificação não recebe assunto nem palavra-chave. */
+  if (!ehRetificacao() && !selAssuntos.length) {
     if (!confirm('Nenhum assunto selecionado. Salvar assim mesmo?')) return;
   }
 
