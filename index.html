@@ -313,6 +313,9 @@ let buscaRel = '', relNovo = { tipo: 'retifica', sentido: 'ativa' }, relSalvando
    pessoa escolheu. Sem isso o bloco fecharia a cada tecla, porque a ficha é
    redesenhada inteira a cada caractere digitado na busca. */
 let relManAberto = null;
+// Mesmo motivo do relManAberto: o bloco das sugestões menos prováveis é um <details>, e
+// sem guardar o estado ele fecharia a cada tecla digitada em qualquer campo da ficha.
+let sugMaisAberto = false;
 // id -> nome de quem revisou. A etapa grava usuario_id; sem este mapa a tela só sabia
 // dizer o ESTÁGIO ("Especialista 1"), que é o papel, não a pessoa.
 let perfisPorId = {};
@@ -821,6 +824,7 @@ async function abrir(id){
   rejeitadas = []; buscaPalavra = ''; propostasNovas = [];
   legisManuais = []; buscaLegis = ''; ocorrenciaAtual = {};
   buscaRel = ''; relManAberto = null; relNovo = { tipo: 'retifica', sentido: 'ativa' };
+  sugMaisAberto = false;    // norma nova começa pelas mais prováveis, não pelo varal
   propostas = {}; linhaPlanilha = null;
   precisaCompilar = d.precisa_compilar; compilada = d.compilada; linkDocx = null;
   temRascunho = !!(d.rascunho && typeof d.rascunho === 'object');
@@ -1029,6 +1033,23 @@ function sugerirPalavras(){
   return out;
 }
 
+/* Quantas sugestões ficam à vista. Medido em 09/11/2026 sobre 2.095 decisões reais:
+   mostrar as 6 primeiras desta ordenação preserva 85,2% de tudo o que a equipe aceitou
+   e corta dois terços do volume — a precisão vai de 12,6% para 30,4%. O resto não some,
+   fica recolhido. Ver Nota_regras_v2_a_partir_do_uso.md. */
+function quantasAVista(){ return config.sugestoes_a_vista || 6; }
+
+/* Separa as sugestões em "à vista" e "recolhidas", preservando a ordenação.
+   Termo JÁ SELECIONADO nunca vai para o bloco recolhido: se fosse, a caixa marcada
+   sumiria da tela ao fechar o bloco e desmarcar exigiria procurar onde ela foi parar. */
+function fatiarSugestoes(sug, selecionadas, n){
+  const sel = new Set(selecionadas || []);
+  const marcadas = sug.filter(s => sel.has(s.termo));
+  const resto = sug.filter(s => !sel.has(s.termo));
+  const vagas = Math.max(0, (n || 0) - marcadas.length);
+  return { aVista: marcadas.concat(resto.slice(0, vagas)), recolhidas: resto.slice(vagas) };
+}
+
 /* ---------- ficha ---------- */
 function limiteAssuntos(){ return config.limite_assuntos || 3; }
 function limitePalavras(){ return config.limite_palavras_chave || 6; }
@@ -1212,6 +1233,20 @@ function renderFicha(){
   const relsAlt = relAtual;
   const cheioA = selAssuntos.length >= limiteAssuntos();
   const cheioP = selPalavras.length >= limitePalavras();
+  const corte = fatiarSugestoes(sug, selPalavras, quantasAVista());
+  const linhaSugerida = s => `
+          <div class="termo">
+            <input type="checkbox" ${selPalavras.includes(s.termo)?'checked':''}
+                   ${(!selPalavras.includes(s.termo) && cheioP)?'disabled':''}
+                   onchange="alternarPalavra(${arg(s.termo)})">
+            <span style="flex:1;cursor:pointer" title="clique para ver no texto"
+                  onclick="irParaOcorrencia(${arg(s.termo)})">${esc(s.termo)}</span>
+            <button class="lupa" title="próxima ocorrência no texto"
+                    onclick="irParaOcorrencia(${arg(s.termo)})">⌖</button>
+            ${s.provisoria ? '<span class="badge" title="proposto por quem indexou outra norma; ainda não passou pela curadoria e não integra o vocabulário oficial">da equipe</span>' : ''}
+            <span class="badge ${s.cabeca?'em':''}">${s.cabeca?'ementa/Art. 1º':'só no corpo'}</span>
+            <span class="cnt">×${s.n}</span>
+          </div>`;
 
   // A triagem vem primeiro: não sendo norma patrimonial, não há assunto nem palavra-chave
   // de patrimônio a atribuir, e insistir só produziria classificação forçada.
@@ -1254,22 +1289,20 @@ function renderFicha(){
       ${cheioP ? '<div class="ajuda" style="color:var(--bad)">Limite atingido.</div>' : ''}
     </div>
     <div class="campo" style="margin-bottom:8px">
-      <label>Sugeridas — ocorrem no texto</label>
+      <label>Sugeridas — as mais prováveis primeiro</label>
       <div data-rolagem="sugeridas" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px">
-        ${sug.length ? sug.slice(0,40).map(s => `
-          <div class="termo">
-            <input type="checkbox" ${selPalavras.includes(s.termo)?'checked':''}
-                   ${(!selPalavras.includes(s.termo) && cheioP)?'disabled':''}
-                   onchange="alternarPalavra(${arg(s.termo)})">
-            <span style="flex:1;cursor:pointer" title="clique para ver no texto"
-                  onclick="irParaOcorrencia(${arg(s.termo)})">${esc(s.termo)}</span>
-            <button class="lupa" title="próxima ocorrência no texto"
-                    onclick="irParaOcorrencia(${arg(s.termo)})">⌖</button>
-            ${s.provisoria ? '<span class="badge" title="proposto por quem indexou outra norma; ainda não passou pela curadoria e não integra o vocabulário oficial">da equipe</span>' : ''}
-            <span class="badge ${s.cabeca?'em':''}">${s.cabeca?'ementa/Art. 1º':'só no corpo'}</span>
-            <span class="cnt">×${s.n}</span>
-          </div>`).join('') : '<div class="vazio">Nenhum termo da taxonomia ocorre neste texto.</div>'}
+        ${corte.aVista.length ? corte.aVista.map(linhaSugerida).join('')
+          : '<div class="vazio">Nenhum termo da taxonomia ocorre neste texto.</div>'}
       </div>
+      ${corte.aVista.length ? `<div class="ajuda">Ordem: o que aparece na ementa ou no Art. 1º vem antes do que só aparece no corpo. Medido no uso: um termo que está na ementa uma única vez é aceito sete vezes mais que um que aparece dez vezes só no corpo.</div>` : ''}
+      ${corte.recolhidas.length ? `
+        <details ${sugMaisAberto ? 'open' : ''} ontoggle="sugMaisAberto = this.open" style="margin-top:6px">
+          <summary style="cursor:pointer;font-size:13px">ver as outras ${corte.recolhidas.length} — ocorrem no texto, mas com evidência mais fraca</summary>
+          <div data-rolagem="sugeridasMais" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px;margin-top:6px">
+            ${corte.recolhidas.slice(0,60).map(linhaSugerida).join('')}
+            ${corte.recolhidas.length > 60 ? `<div class="ajuda" style="padding:4px 2px">… e mais ${corte.recolhidas.length - 60}, com evidência ainda mais fraca. Se o termo certo estiver aí, é mais rápido achá-lo pela busca no vocabulário, abaixo.</div>` : ''}
+          </div>
+        </details>` : ''}
     </div>
 
     <div class="campo">
