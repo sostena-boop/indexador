@@ -395,6 +395,17 @@ const TIPOS_REL = {
   suspende:            { opcao:'suspende',          ativa:'suspende',        passiva:'suspensa' },
   altera:              { opcao:'altera',            ativa:'altera',          passiva:'alterada' },
   regulamenta:         { opcao:'regulamenta',       ativa:'regulamenta',     passiva:'regulamentada' },
+  /* `a_esclarecer` entrou em 11/11/2026, a pedido da equipe. É o balaio do que não se sabe
+     nomear: colisão entre duas normas, perda de fundamento (a norma existe porque um
+     decreto autorizou, e o decreto caiu), possível revogação tácita. O que une os casos é
+     que a validade ficou em dúvida por causa de outra norma — e que a dúvida é do jurista,
+     não da ferramenta.
+     É SIMÉTRICA: conflito não tem quem fez e quem sofreu, então não há verbo ativo e
+     passivo, e a tela não pergunta o sentido. O rótulo é o que o Juarez escolheu, e chama
+     atenção de propósito; no export sai como "Relação a esclarecer", porque aquilo chega
+     ao Tainacan, que é público. */
+  a_esclarecer:        { opcao:'não está sendo fácil', ativa:'não está sendo fácil',
+                         passiva:'não está sendo fácil', simetrica:true },
   /* `retifica` deixou de ser oferecido em 11/11/2026: a equipe do repositório decidiu que
      a norma retificadora passa a ser ANEXO da norma retificada, e não item próprio do
      acervo. Sem item, não há o que relacionar.
@@ -2145,7 +2156,8 @@ function renderRel(r){
   const tEfetivo = tipoDe(r);
   const corrigido = tEfetivo !== r.tipo;
   const verbo = TIPOS_REL[tEfetivo] || { ativa: tEfetivo, passiva: tEfetivo, opcao: tEfetivo };
-  const frase = souOrigem ? `Esta norma <b>${verbo.ativa}</b>`
+  const frase = verbo.simetrica ? `Esta norma e a outra: <b>${verbo.ativa}</b> —`
+              : souOrigem ? `Esta norma <b>${verbo.ativa}</b>`
                           : `Esta norma <b>foi ${verbo.passiva}</b> por`;
   const d = decisoesRel[r.id];
   // dispositivo só faz sentido em revogação/alteração parcial; corrigido para integral,
@@ -2192,6 +2204,7 @@ function renderRel(r){
    detectadas na hora de salvar — nenhuma regra nova no gravador. */
 function rotuloSentido(k, sentido){
   const v = TIPOS_REL[k] || { ativa:k, passiva:k };
+  if (v.simetrica) return v.ativa;   // conflito não tem direção: o rótulo é o mesmo dos dois lados
   return sentido === 'ativa' ? v.ativa : `foi ${v.passiva} por`;
 }
 function blocoRelManual(){
@@ -2203,10 +2216,11 @@ function blocoRelManual(){
     <div class="ajuda" style="margin:8px 0">Vale para o que o extrator não enxerga: ato sem
       ementa e sem Art. 1º, texto em OCR, página de Diário com vários atos.</div>
     <div class="relman-linha">
+      ${(TIPOS_REL[relNovo.tipo]||{}).simetrica ? '<span class="ajuda">esta norma e a outra:</span>' : `
       <select onchange="setRelSentido(this.value)" title="quem faz o quê">
         <option value="ativa" ${relNovo.sentido==='ativa'?'selected':''}>esta norma…</option>
         <option value="passiva" ${relNovo.sentido==='passiva'?'selected':''}>esta norma foi…</option>
-      </select>
+      </select>`}
       <select onchange="setRelTipo(this.value)">
         ${tiposOferecidos().map(k => `<option value="${k}"${k===relNovo.tipo?' selected':''}>
           ${esc(rotuloSentido(k, relNovo.sentido))}</option>`).join('')}
@@ -2308,7 +2322,11 @@ function outraPonta(r){
    Norma sem cadastro no Tainacan não tem id e portanto não vira link: fica sinalizada. */
 function legisDasRelacoes(){
   const out = [];
-  relAtual.filter(r => decisoesRel[r.id] === 'confirmada').forEach(r => {
+  /* `a_esclarecer` fica DE FORA de Legislação Relacionada, por decisão do Juarez em
+     11/11/2026: ela vai para coluna própria no export, porque talvez vire metadado
+     separado no Tainacan. Misturá-la aqui faria uma dúvida jurídica chegar ao repositório
+     com a mesma cara de um vínculo já estabelecido. */
+  relAtual.filter(r => decisoesRel[r.id] === 'confirmada' && tipoDe(r) !== 'a_esclarecer').forEach(r => {
     const souOrigem = r.origem_id === docAtual.id;
     const idOutro = souOrigem ? r.destino_id : r.origem_id;
     const d = idOutro ? docsPorId[idOutro] : null;
@@ -2567,7 +2585,11 @@ async function salvarUmaVez(modo){
     dispositivos_revogados: [...new Set(confirmadas
       .filter(r => tipoDe(r)==='revoga_parcialmente' && r.destino_id===docAtual.id)
       .flatMap(r => r.dispositivos_afetados || []))],
-    norma_regulamentacao: idsDe(r => tipoDe(r)==='regulamenta', r => r.destino_id)
+    norma_regulamentacao: idsDe(r => tipoDe(r)==='regulamenta', r => r.destino_id),
+    // simétrica: a "outra ponta" depende de qual lado esta norma ocupa na relação
+    relacao_a_esclarecer: [...new Set(confirmadas.filter(r => tipoDe(r)==='a_esclarecer')
+      .map(r => docsPorId[r.origem_id === docAtual.id ? r.destino_id : r.origem_id])
+      .filter(d => d && d.item_id_tainacan).map(d => String(d.item_id_tainacan)))].join('||')
   });
 
   /* Registro para calibração. Sem distinguir estes quatro casos não dá para responder
@@ -3084,6 +3106,7 @@ async function exportarExcel(){
   const colsIdx = ['special_item_id','Lote','Título','Assunto','assunto_taxonomia_2','assunto_taxonomia_3',
     'regime_destinacao','regime_aquisicao','Palavra-chave','Situação da Norma','data_inicio_vigencia',
     'Ato de Revogação','Revogado em','Norma de regulamentação','Ato de alteração','Legislação Relacionada',
+    'Relação a esclarecer',
     'Não é norma patrimonial','Motivo da recusa','Observações','Marcada com dúvida','Dúvida — qual',
     'Revisado por','Revisado em'];
   const idx = [colsIdx];
@@ -3101,6 +3124,8 @@ async function exportarExcel(){
       cam[0]||'', cam[1]||'', cam[2]||'', c.regime_destinacao||'', c.regime_aquisicao||'', pcs,
       c.situacao_norma||'', c.data_inicio_vigencia||'', c.ato_revogacao||'', c.revogado_em||'',
       c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'',
+      // coluna separada de propósito: é dúvida a esclarecer, não vínculo estabelecido
+      c.relacao_a_esclarecer||'',
       e.patrimonial === false ? 'sim' : '', motivoDaRecusa(e),
       // a observação vive na ficha (etapas_revisao.campos); a dúvida, no documento
       c.observacoes || '', d.em_duvida ? 'sim' : '',
@@ -3137,7 +3162,8 @@ async function exportarCSV(){
   });
   const cols = ['special_item_id','Assunto','assunto_taxonomia_2','assunto_taxonomia_3','regime_destinacao',
     'regime_aquisicao','Palavra-chave','Situação da Norma','data_inicio_vigencia','Ato de Revogação',
-    'Revogado em','Norma de regulamentação','Ato de alteração','Legislação Relacionada'];
+    'Revogado em','Norma de regulamentação','Ato de alteração','Legislação Relacionada',
+    'Relação a esclarecer'];
   const linhas = [cols.join(';')];
   (docs||[]).forEach(d => {
     const e = porDoc[d.id]; if (!e) return;
@@ -3145,7 +3171,8 @@ async function exportarCSV(){
     const pcs = (e.termos||[]).filter(t=>t.decisao!=='rejeitado').map(t=>t.termo).join(' || ');
     const v = [ d.item_id_tainacan||'', cam[0]||'', cam[1]||'', cam[2]||'', c.regime_destinacao||'',
       c.regime_aquisicao||'', pcs, c.situacao_norma||'', c.data_inicio_vigencia||'', c.ato_revogacao||'',
-      c.revogado_em||'', c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'' ];
+      c.revogado_em||'', c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'',
+      c.relacao_a_esclarecer||'' ];
     linhas.push(v.map(x => `"${String(x).replace(/"/g,'""')}"`).join(';'));
   });
   const blob = new Blob(['\ufeff' + linhas.join('\n')], { type:'text/csv;charset=utf-8' });
