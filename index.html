@@ -379,8 +379,15 @@ const CAMPOS_CADASTRO = [
   { k: 'orgao_edicao_2',  r: 'Órgão de edição 2',  lista: 'orgaos', soConjunta: true },
 ];
 
+/* "Revogado tacitamente" saiu em 11/11/2026, a pedido da equipe. O motivo é bom: a
+   situação afirmava uma revogação que ninguém declarou, e sem dizer contra o quê —
+   levantamento do mesmo dia: 30 normas com o rótulo, ZERO com relação, ato de revogação
+   ou data que apontasse a norma revogadora. O caso passa a ser registrado pela relação
+   `a_esclarecer` ("não está sendo fácil"), que exige nomear a outra norma.
+   `situacoesDaFicha` preserva o valor nas fichas antigas e a tela o sinaliza — lista
+   fechada sobre campo de texto apaga o que não conhece, e isso já aconteceu aqui. */
 const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Suspenso',
-                  'Revogado','Revogado tacitamente','Revogado expressamente'];
+                  'Revogado','Revogado expressamente'];
 /* Fonte única dos tipos de relação: rótulo do seletor, verbo ativo e particípio passivo.
    Antes isso vivia em quatro mapas espalhados — `OPCOES` em dois lugares, `ativa` e
    `passiva` — e acrescentar um tipo exigia lembrar dos quatro. A frase passiva é montada
