@@ -244,7 +244,9 @@ select.tp:hover { border-color:var(--terra); }
           <button class="b sec" onclick="abrirPainel()"
                   title="andamento do trabalho, dúvidas e observações">Painel</button>
           <button class="b sec" onclick="exportarExcel()"
-                  title="planilha para a equipe do repositório — a preparação do CSV de carga é feita por eles">Exportar Excel</button>
+                  title="planilha completa para a equipe: inclui o que não cabe no CSV — correções propostas, observações, dúvidas e recusas">Exportar Excel</button>
+          <button class="b sec" onclick="exportarCSV()"
+                  title="CSV pronto para o importador do Tainacan: só os campos que o Indexador preenche, com o id da coleção">Exportar CSV</button>
                     <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
         </div>
         <div id="novaNorma" class="hidden" style="border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff">
@@ -3157,36 +3159,97 @@ async function exportarExcel(){
                    'indexacao_memoria_spu.xlsx');
 }
 
+/* ---------- export CSV, nativo, para o importador do Tainacan (19/11/2026)
+
+   Reescrito do zero. A versão anterior era de 28/07, ficou órfã quando o botão virou
+   "Exportar Excel" em 24/08, e produzia quatro dos defeitos que a auditoria depois
+   catalogou: id do acervo ANTIGO, separador `' || '` com espaço, três colunas de assunto
+   num metadado que é multivalorado, e nomes de coluna da planilha em vez dos rótulos dos
+   metadados da coleção.
+
+   Por que nativo: a equipe do Tainacan relatou que converter Excel para CSV dá erro, e a
+   coleção prova — 145 datas passaram a ter o mês na frente e 16 viraram número, todas
+   nascidas nessa conversão. CSV que já sai pronto não passa por lá.
+
+   O que o arquivo é, e o que ele NÃO é. Ele leva **só os campos que o Indexador preenche**
+   — o bloco verde. Título, ementa, número, data de publicação e órgão são campos azuis,
+   de transcrição, e não saem daqui. O que não tem metadado correspondente na coleção
+   (Ato de Revogação, Legislação Relacionada, Relação a esclarecer, observações, dúvidas,
+   recusas) continua só no Excel.
+
+   Os rótulos do cabeçalho são os da coleção 382621, lidos pela API — inclusive
+   "Assunto (funções finalisticas)", que é como está escrito lá. Sem sufixo `|taxonomy|`:
+   essa é a sintaxe de CRIAÇÃO de metadado, e usá-la faz o Tainacan criar taxonomia nova.
+
+   Decisões de formato, cada uma por um caso medido:
+     - separador de coluna `,` e de valor múltiplo `||` sem espaço: são os padrões do
+       importador, e o espaço em volta do `||` vira parte do nome do termo — foi assim que
+       nasceu o termo "Ministério da Economia||Ministério do Turismo" que está na coleção;
+     - sem BOM: ele é tolerado desde a 1.3.0, mas só serve para o Excel abrir bonito, e
+       este arquivo não deve passar pelo Excel;
+     - ficha sem `item_id_colecao` FICA DE FORA. Linha sem id não atualiza nada: o
+       importador cria item novo, em silêncio. Melhor entregar menos.
+
+   Atenção que vale repetir a quem for importar: os caminhos de assunto vêm da Tabela
+   Taxonômica de Funções Finalísticas, e o importador CRIA os termos que não existirem na
+   taxonomia de destino. Isso é decisão de curadoria do repositório, não efeito colateral
+   a aceitar sem combinar. */
 async function exportarCSV(){
   const { data: etapas } = await sb.from('etapas_revisao')
-    .select('documento_id,estagio,campos,termos,criado_em').limit(2000);
+    .select('documento_id,campos,termos,criado_em,patrimonial').limit(2000);
   const { data: docs } = await sb.from('documentos')
-    .select('id,item_id_tainacan,titulo').eq('colecao_id', colecaoId).limit(1000);
+    .select('id,item_id_colecao,titulo').eq('colecao_id', colecaoId).limit(1000);
+
   const porDoc = {};
   (etapas||[]).forEach(e => {
     const a = porDoc[e.documento_id];
     if (!a || a.criado_em < e.criado_em) porDoc[e.documento_id] = e;
   });
-  const cols = ['special_item_id','Assunto','assunto_taxonomia_2','assunto_taxonomia_3','regime_destinacao',
-    'regime_aquisicao','Palavra-chave','Situação da Norma','data_inicio_vigencia','Ato de Revogação',
-    'Revogado em','Norma de regulamentação','Ato de alteração','Legislação Relacionada',
-    'Relação a esclarecer'];
-  const linhas = [cols.join(';')];
+
+  // rótulo do metadado na coleção -> como tirar o valor da ficha
+  const COLS = [
+    ['Assunto (funções finalisticas)', (c, t) => (c.assuntos_caminho || []).join('||')],
+    ['Regime de Destinação',           (c, t) => c.regime_destinacao || ''],
+    ['Regime de Aquisição',            (c, t) => c.regime_aquisicao || ''],
+    ['Palavra-chave',                  (c, t) => t.filter(x => x.decisao !== 'rejeitado')
+                                                  .map(x => x.termo).join('||')],
+    ['Situação da Norma',              (c, t) => c.situacao_norma || ''],
+    ['Data de início da vigência',     (c, t) => c.data_inicio_vigencia || ''],
+  ];
+
+  const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
+  const linhas = [['special_item_id'].concat(COLS.map(c => c[0])).map(cel).join(',')];
+  let semId = 0, recusadas = 0, vazias = 0;
+
   (docs||[]).forEach(d => {
-    const e = porDoc[d.id]; if (!e) return;
-    const c = e.campos || {}, cam = c.assuntos_caminho || [];
-    const pcs = (e.termos||[]).filter(t=>t.decisao!=='rejeitado').map(t=>t.termo).join(' || ');
-    const v = [ d.item_id_tainacan||'', cam[0]||'', cam[1]||'', cam[2]||'', c.regime_destinacao||'',
-      c.regime_aquisicao||'', pcs, c.situacao_norma||'', c.data_inicio_vigencia||'', c.ato_revogacao||'',
-      c.revogado_em||'', c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'',
-      c.relacao_a_esclarecer||'' ];
-    linhas.push(v.map(x => `"${String(x).replace(/"/g,'""')}"`).join(';'));
+    const e = porDoc[d.id];
+    if (!e) return;                                        // ninguém indexou
+    if (e.patrimonial === false) { recusadas++; return; }  // recusada na triagem
+    if (!d.item_id_colecao) { semId++; return; }           // sem id, viraria item novo
+    const c = e.campos || {}, t = e.termos || [];
+    const valores = COLS.map(col => col[1](c, t));
+    if (!valores.some(v => v !== '')) { vazias++; return; }
+    linhas.push([d.item_id_colecao].concat(valores).map(cel).join(','));
   });
-  const blob = new Blob(['\ufeff' + linhas.join('\n')], { type:'text/csv;charset=utf-8' });
+
+  if (linhas.length === 1){ alert('Nada indexado com id da coleção para exportar.'); return; }
+
+  const blob = new Blob([linhas.join('\r\n') + '\r\n'], { type:'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'indexacao_memoria_spu.csv';
+  a.download = 'memoria_spu_indexacao_' + new Date().toISOString().slice(0,10) + '.csv';
   a.click();
+
+  const fora = [];
+  if (semId) fora.push(semId + ' sem id da coleção');
+  if (recusadas) fora.push(recusadas + ' recusadas na triagem');
+  if (vazias) fora.push(vazias + ' sem nenhum campo preenchido');
+  alert((linhas.length - 1) + ' fichas no arquivo.' +
+    (fora.length ? '\n\nFicaram de fora: ' + fora.join(', ') + '.' : '') +
+    '\n\nNa tela do importador: Item repetido = Atualizar, Codificação = UTF-8 (nunca ' +
+    '"Automática"), delimitador "," e multivalorado "||". Mapeie cada coluna para o ' +
+    'metadado EXISTENTE — nunca "Criar metadado".' +
+    '\n\nNão abra nem salve este arquivo no Excel antes de importar.');
 }
 
 iniciar();
