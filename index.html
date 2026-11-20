@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Indexador — Legislação e Normativos (Memória SPU)</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="spu-caixinha.js?v=2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -61,6 +62,11 @@ details.exp-tec { margin-top:6px; font-size:13.5px; line-height:1.6; }
 details.exp-tec summary { cursor:pointer; color:var(--accent); font-weight:600; }
 /* a altura desconta a faixa do topo, as margens e a linha de baixo: o manual foi feito para
    caber numa tela só, e a página em volta não pode rolar por causa dele */
+/* O balão "Reportar problema" é o da caixinha do Escritório, o mesmo dos Formulários de
+   Instrução. Lá ele fica no canto direito; aqui vai à ESQUERDA, porque no canto direito de
+   baixo ficam os botões de salvar da ficha, e o balão os cobriria. */
+body .spuc-flutua { right:auto; left:max(16px, env(safe-area-inset-left,0px)); }
+body .spuc-flutua .spuc-bt { box-shadow:0 2px 10px rgba(0,0,0,.25); }
 #manualQuadro { width:100%; height:calc(100vh - 250px); min-height:480px; border:1px solid var(--line);
   border-radius:16px; background:var(--card); box-shadow:var(--sombra); display:block; }
 .who { font-size:12.5px; color:#bcd2c6; }
@@ -700,6 +706,7 @@ async function fazerLogin(ev){
    a conta pode existir sem estar liberada — por isso a segunda consulta. */
 async function aposLogin(session){
   const email = (session.user && session.user.email) || '';
+  emailDaSessao = email;
   const { data: perfil } = await sb.from('perfis')
     .select('id,nome_exibicao').ilike('email', email).limit(1).maybeSingle();
 
@@ -730,12 +737,62 @@ async function entrar(id, nome){
   document.getElementById('abas').classList.remove('hidden');
   document.querySelector('header').classList.add('com-abas');
   document.getElementById('who').innerHTML =
-    `<b>${esc(nome)}</b><button onclick="sair()">sair</button>`;
+    `<b>${esc(nome)}</b><button onclick="falarComAEquipe()">Fale com a equipe</button>` +
+    `<button onclick="sair()">sair</button>`;
+  ligarCaixinha();
   await carregarBase();
   await carregarFila();
 }
 
 async function sair(){ await sb.auth.signOut(); location.reload(); }
+
+/* ---------- fale com a equipe (20/11/2026)
+   A caixinha do Escritório de Processos: quem indexa aponta erro, dúvida ou sugestão, e o
+   relato cai na área de trabalho da equipe do Escritório (a Home EPP), no projeto
+   «Indexador da coleção de Normativos». Dois botões, uma ficha só, como nas demais
+   ferramentas: o balão "Reportar problema", fixo no canto, e "Fale com a equipe" no topo.
+
+   A área da equipe mora em OUTRO banco e em outra organização do Supabase, e isso não
+   atrapalha: a caixinha não usa o login daqui. Ela chama uma porta pública daquele banco
+   (`spu_registrar_pedido`), feita para receber relato de fora, com a chave publicável que
+   já vem dentro do `spu-caixinha.js`. Nada do banco do Indexador é enviado — só o que a
+   pessoa escreve e o "caso" abaixo, que ela vê antes de enviar.
+
+   O e-mail já vem preenchido com o de quem entrou: é por ele que a equipe acha a pessoa.
+   Para testar sem enviar nada, abra a página com `?caixinha=ensaio`. */
+let emailDaSessao = '';
+const NOME_DA_ABA = { indexacao: 'Indexação', exportacao: 'Exportação', manual: 'Manual' };
+// O caso que vai junto com o relato. Função pura: recebe o que precisa, não lê a tela.
+function contextoDaCaixinha(aba, doc, nome){
+  const caso = [];
+  if (nome) caso.push(['Quem relata', nome]);
+  caso.push(['Seção', NOME_DA_ABA[aba] || NOME_DA_ABA.indexacao]);
+  if (aba === 'indexacao' && doc && doc.titulo) {
+    caso.push(['Norma aberta', doc.titulo]);
+    if (doc.item_id_tainacan) caso.push(['Id da norma', String(doc.item_id_tainacan)]);
+    if (doc.lote) caso.push(['Lote', String(doc.lote)]);
+  }
+  return caso;
+}
+function abaAtual(){
+  return ABAS.find(a => !document.getElementById('aba-' + a).classList.contains('hidden')) || 'indexacao';
+}
+function ligarCaixinha(){
+  if (!window.SPUCaixinha) return;      // arquivo ausente (página aberta do disco): sem botão, sem erro
+  try { if (emailDaSessao) localStorage.setItem('spu-caixinha-contato', emailDaSessao.toLowerCase()); } catch (e) {}
+  window.SPUCaixinha.iniciar({
+    ferramenta: 'indexador',
+    nome: 'Indexador',
+    rotuloBotao: 'Reportar problema',
+    cor: '#1e5c4f', tema: 'claro',
+    ensaio: /[?&]caixinha=ensaio\b/.test(location.search),
+    contexto: function(){
+      const naFicha = !document.getElementById('telaDoc').classList.contains('hidden');
+      return contextoDaCaixinha(abaAtual(), naFicha ? docAtual : null, usuario && usuario.nome);
+    }
+  });
+}
+function falarComAEquipe(){ if (window.SPUCaixinha) window.SPUCaixinha.abrir(); }
 
 /* ---------- abas (20/11/2026): Indexação · Exportação · Manual
    Trocar de aba só esconde e mostra — nada é recarregado. Quem está no meio de uma ficha,
