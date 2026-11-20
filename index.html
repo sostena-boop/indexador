@@ -246,7 +246,7 @@ select.tp:hover { border-color:var(--terra); }
           <button class="b sec" onclick="exportarExcel()"
                   title="planilha completa para a equipe: inclui o que não cabe no CSV — correções propostas, observações, dúvidas e recusas">Exportar Excel</button>
           <button class="b sec" onclick="exportarCSV()"
-                  title="CSV pronto para o importador do Tainacan: só os campos que o Indexador preenche, com o id da coleção">Exportar CSV</button>
+                  title="CSV pronto para o importador do Tainacan: todos os metadados da coleção, na ordem dela, para as normas dos lotes liberados">Exportar CSV</button>
                     <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
         </div>
         <div id="novaNorma" class="hidden" style="border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff">
@@ -418,7 +418,8 @@ const TIPOS_REL = {
   /* `retifica` deixou de ser oferecido em 11/11/2026: a equipe do repositório decidiu que
      a norma retificadora passa a ser ANEXO da norma retificada, e não item próprio do
      acervo. Sem item, não há o que relacionar.
-     Continua aqui, e isso não é descuido: 7 relações `retifica` já existem no banco e a
+     Continua aqui, e isso não é descuido: 9 relações `retifica` existem no banco (2
+     confirmadas — as retificações de verdade — e 7 rejeitadas, conferido em 20/11/2026) e a
      lista de exibição aceita qualquer tipo de propósito. Apagar a entrada faria essas
      relações aparecerem sem rótulo na ficha — o tipo sumiria da tela por esquecimento,
      que é exatamente o erro cometido quando `revoga_parcialmente` surgiu. `oculto` tira
@@ -3159,97 +3160,256 @@ async function exportarExcel(){
                    'indexacao_memoria_spu.xlsx');
 }
 
-/* ---------- export CSV, nativo, para o importador do Tainacan (19/11/2026)
+/* ---------- export CSV para o importador do Tainacan — segunda versão (20/11/2026)
 
-   Reescrito do zero. A versão anterior era de 28/07, ficou órfã quando o botão virou
-   "Exportar Excel" em 24/08, e produzia quatro dos defeitos que a auditoria depois
-   catalogou: id do acervo ANTIGO, separador `' || '` com espaço, três colunas de assunto
-   num metadado que é multivalorado, e nomes de coluna da planilha em vez dos rótulos dos
-   metadados da coleção.
+   A primeira, de 19/11, levava seis campos fixos, escritos à mão a partir da estrutura
+   da coleção lida em 16/11. No dia seguinte a estrutura já era outra: 19 metadados em vez
+   de 16, em outra ordem; entraram "Ano de publicação", "Data de assinatura", "Legislação
+   Relacionada" e "Revogado em", saiu "Link de acesso", e três campos viraram
+   multivalorados. Cabeçalho escrito à mão envelhece na velocidade em que a equipe do
+   repositório trabalha — então ele deixou de ser escrito à mão.
 
-   Por que nativo: a equipe do Tainacan relatou que converter Excel para CSV dá erro, e a
-   coleção prova — 145 datas passaram a ter o mês na frente e 16 viraram número, todas
-   nascidas nessa conversão. CSV que já sai pronto não passa por lá.
+   Agora a ESTRUTURA é lida do próprio Memória SPU na hora de exportar (a API é pública e
+   aceita a origem desta página): quais metadados existem, em que ordem, e quais aceitam
+   mais de um valor. O arquivo sai com TODOS os metadados da coleção, na ordem dela, com
+   o rótulo exato — é isso que faz a tela de mapeamento do importador casar coluna por
+   coluna sem trabalho manual. Se a leitura falhar, usa-se a estrutura de reserva gravada
+   abaixo, e o aviso final diz isso em voz alta.
 
-   O que o arquivo é, e o que ele NÃO é. Ele leva **só os campos que o Indexador preenche**
-   — o bloco verde. Título, ementa, número, data de publicação e órgão são campos azuis,
-   de transcrição, e não saem daqui. O que não tem metadado correspondente na coleção
-   (Ato de Revogação, Legislação Relacionada, Relação a esclarecer, observações, dúvidas,
-   recusas) continua só no Excel.
+   O que mudou no conteúdo: o arquivo leva também o CADASTRO (título, tipo, ementa,
+   número, datas, órgão, sigla), não só a indexação. Nos lotes o cadastro do Indexador é
+   a planilha auditada, que é a base do trabalho; exportá-lo é o que leva a correção de
+   volta à coleção — inclusive as datas, que a conversão por Excel vinha estragando.
 
-   Os rótulos do cabeçalho são os da coleção 382621, lidos pela API — inclusive
-   "Assunto (funções finalisticas)", que é como está escrito lá. Sem sufixo `|taxonomy|`:
-   essa é a sintaxe de CRIAÇÃO de metadado, e usá-la faz o Tainacan criar taxonomia nova.
+   Regras que valem para toda célula, cada uma por um caso medido:
+     - célula sem valor fica VAZIA, e o importador a ignora: o campo da ficha não muda;
+     - campo multivalorado junta com `||` sem espaço; campo de valor único recebe só o
+       primeiro valor, e o que não coube é contado no aviso (num campo de valor único o
+       importador grava "A||B" inteiro como nome de termo — foi assim que nasceu o termo
+       "Ministério da Economia||Ministério do Turismo");
+     - campo numérico só recebe dígitos; campo de data só recebe dd/mm/aaaa;
+     - campo de relacionamento recebe o id da ficha NA COLEÇÃO, traduzido do id antigo;
+       norma relacionada que ainda não tem esse id fica de fora, contada;
+     - ficha sem `item_id_colecao` não entra: linha sem id cria item novo, em silêncio. */
 
-   Decisões de formato, cada uma por um caso medido:
-     - separador de coluna `,` e de valor múltiplo `||` sem espaço: são os padrões do
-       importador, e o espaço em volta do `||` vira parte do nome do termo — foi assim que
-       nasceu o termo "Ministério da Economia||Ministério do Turismo" que está na coleção;
-     - sem BOM: ele é tolerado desde a 1.3.0, mas só serve para o Excel abrir bonito, e
-       este arquivo não deve passar pelo Excel;
-     - ficha sem `item_id_colecao` FICA DE FORA. Linha sem id não atualiza nada: o
-       importador cria item novo, em silêncio. Melhor entregar menos.
+const TAINACAN_API = 'https://memoria-spu.gestao.gov.br/wp-json/tainacan/v2';
+const TAINACAN_COLECAO = 382621;
 
-   Atenção que vale repetir a quem for importar: os caminhos de assunto vêm da Tabela
-   Taxonômica de Funções Finalísticas, e o importador CRIA os termos que não existirem na
-   taxonomia de destino. Isso é decisão de curadoria do repositório, não efeito colateral
-   a aceitar sem combinar. */
-async function exportarCSV(){
-  const { data: etapas } = await sb.from('etapas_revisao')
-    .select('documento_id,campos,termos,criado_em,patrimonial').limit(2000);
-  const { data: docs } = await sb.from('documentos')
-    .select('id,item_id_colecao,titulo').eq('colecao_id', colecaoId).limit(1000);
+// Estrutura da coleção lida em 20/11/2026. Só é usada se a leitura ao vivo falhar.
+const ESTRUTURA_CSV_RESERVA = [
+  ['Título','Core_Title',false], ['Tipo de norma/documento','Taxonomy',false],
+  ['Ementa','Core_Description',false], ['Número da Norma','Numeric',false],
+  ['Situação da Norma','Taxonomy',false], ['Revogado por','Relationship',true],
+  ['Palavra-chave','Taxonomy',true], ['Ano de publicação','Numeric',true],
+  ['Data de assinatura','Text',false], ['Data de publicação/aprovação','Text',false],
+  ['Data de início da vigência','Text',true], ['Órgão/Entidade de edição','Taxonomy',false],
+  ['Sigla do órgão ou da entidade','Taxonomy',true],
+  ['Assunto (funções finalisticas)','Taxonomy',true], ['Regime de Destinação','Taxonomy',true],
+  ['Regime de Aquisição','Taxonomy',true], ['Informações complementares','Textarea',true],
+  ['Legislação Relacionada','Relationship',false], ['Revogado em','Text',false],
+].map(m => ({ rotulo: m[0], tipo: m[1], multiplo: m[2] }));
 
-  const porDoc = {};
-  (etapas||[]).forEach(e => {
-    const a = porDoc[e.documento_id];
-    if (!a || a.criado_em < e.criado_em) porDoc[e.documento_id] = e;
+// "Órgão/Entidade de edição" -> "orgaoentidadedeedicao": casa rótulo sem depender de
+// acento, caixa ou pontuação, que é o que muda quando alguém edita o nome do metadado
+function chaveRotulo(s){
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function partes(v, sep){
+  return String(v == null ? '' : v).split(sep).map(x => x.trim()).filter(Boolean);
+}
+
+/* De onde sai cada metadado. A chave é o COMEÇO do rótulo normalizado — "assunto" casa
+   com "Assunto (funções finalisticas)" e continuaria casando se o parêntese sumisse.
+   Cada fonte devolve uma lista; quem decide se cabe um valor ou vários é a estrutura.
+   `r` = { doc, campos, termos, plan, revogadoPor }.
+   Metadado sem fonte aqui sai como coluna vazia: o Indexador não tem o dado, e coluna
+   vazia não altera a ficha. */
+const FONTES_CSV = [
+  ['titulo',               r => [r.doc.titulo]],
+  ['tipodenorma',          r => [r.doc.tipo_norma]],
+  ['ementa',               r => [r.doc.ementa]],
+  ['resumoementa',         r => [r.doc.ementa]],
+  ['numerodanorma',        r => [r.doc.numero_norma]],
+  ['situacaodanorma',      r => [r.campos.situacao_norma || r.doc.situacao_norma]],
+  ['revogadopor',          r => r.revogadoPor.concat(partes(r.campos.ato_revogacao, '||'))],
+  ['palavrachave',         r => r.termos.filter(t => t.decisao !== 'rejeitado').map(t => t.termo)],
+  ['anodepublicacao',      r => [r.doc.ano_publicacao]],
+  ['datadeassinatura',     r => [r.doc.data_assinatura]],
+  ['datadepublicacao',     r => [r.doc.data_publicacao]],
+  ['datadeiniciodavigencia', r => [r.campos.data_inicio_vigencia]],
+  ['orgaoentidade',        r => partes(r.doc.orgao_edicao, '||').concat(partes(r.plan.orgao_2, '||'))],
+  // a equipe do repositório pediu a sigla composta separada: SPU/MGI -> SPU||MGI
+  ['sigladoorgao',         r => partes(r.plan.sigla_unidade, /\/|\|\|/)
+                                  .concat(partes(r.plan.sigla_unidade_2, /\/|\|\|/))],
+  ['assunto',              r => r.campos.assuntos_caminho || []],
+  ['regimededestinacao',   r => [r.campos.regime_destinacao]],
+  ['regimedeaquisicao',    r => [r.campos.regime_aquisicao]],
+  ['legislacaorelacionada', r => partes(r.campos.legislacao_relacionada, '||')],
+  ['revogadoem',           r => [r.campos.revogado_em]],
+];
+function fonteDoMetadado(rotulo){
+  const k = chaveRotulo(rotulo);
+  const f = FONTES_CSV.find(x => k.indexOf(x[0]) === 0);
+  return f ? f[1] : null;
+}
+
+/* O miolo, sem banco e sem tela — é o que os testes exercitam.
+   estrutura: [{rotulo, tipo, multiplo}] na ordem da coleção
+   registros: [{doc, campos, termos, plan, revogadoPor}]
+   idNaColecao: { id antigo -> id na coleção }, para os campos de relacionamento
+   Devolve a matriz (cabeçalho + linhas) e a contagem do que ficou de fora, por motivo. */
+function montarCsvColecao(estrutura, registros, idNaColecao){
+  const fora = { semId: 0, naoCoube: {}, relSemId: 0, numeroInvalido: 0, dataInvalida: 0 };
+  const semFonte = estrutura.filter(m => !fonteDoMetadado(m.rotulo)).map(m => m.rotulo);
+  const matriz = [['special_item_id'].concat(estrutura.map(m => m.rotulo))];
+
+  registros.forEach(r => {
+    if (!r.doc.item_id_colecao) { fora.semId++; return; }
+    const linha = [String(r.doc.item_id_colecao)];
+    estrutura.forEach(m => {
+      const fonte = fonteDoMetadado(m.rotulo);
+      if (!fonte) { linha.push(''); return; }
+      let v = fonte(r).map(x => String(x == null ? '' : x).trim()).filter(Boolean);
+      if (m.tipo === 'Relationship') {
+        const antes = v.length;
+        v = v.map(x => idNaColecao[x]).filter(Boolean).map(String);
+        fora.relSemId += antes - v.length;
+      }
+      if (m.tipo === 'Numeric') {
+        const antes = v.length;
+        v = v.filter(x => /^\d+$/.test(x));
+        fora.numeroInvalido += antes - v.length;
+      }
+      const k = chaveRotulo(m.rotulo);
+      if (k.indexOf('data') === 0 || k === 'revogadoem') {
+        const antes = v.length;
+        v = v.filter(x => /^\d{2}\/\d{2}\/\d{4}$/.test(x));
+        fora.dataInvalida += antes - v.length;
+      }
+      v = [...new Set(v)];
+      if (!m.multiplo && v.length > 1) {
+        fora.naoCoube[m.rotulo] = (fora.naoCoube[m.rotulo] || 0) + 1;
+        v = v.slice(0, 1);
+      }
+      linha.push(v.join('||'));
+    });
+    matriz.push(linha);
   });
+  return { matriz, fora, semFonte };
+}
 
-  // rótulo do metadado na coleção -> como tirar o valor da ficha
-  const COLS = [
-    ['Assunto (funções finalisticas)', (c, t) => (c.assuntos_caminho || []).join('||')],
-    ['Regime de Destinação',           (c, t) => c.regime_destinacao || ''],
-    ['Regime de Aquisição',            (c, t) => c.regime_aquisicao || ''],
-    ['Palavra-chave',                  (c, t) => t.filter(x => x.decisao !== 'rejeitado')
-                                                  .map(x => x.termo).join('||')],
-    ['Situação da Norma',              (c, t) => c.situacao_norma || ''],
-    ['Data de início da vigência',     (c, t) => c.data_inicio_vigencia || ''],
-  ];
-
+function csvTexto(matriz){
   const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
-  const linhas = [['special_item_id'].concat(COLS.map(c => c[0])).map(cel).join(',')];
-  let semId = 0, recusadas = 0, vazias = 0;
+  return matriz.map(l => l.map(cel).join(',')).join('\r\n') + '\r\n';
+}
 
-  (docs||[]).forEach(d => {
-    const e = porDoc[d.id];
-    if (!e) return;                                        // ninguém indexou
-    if (e.patrimonial === false) { recusadas++; return; }  // recusada na triagem
-    if (!d.item_id_colecao) { semId++; return; }           // sem id, viraria item novo
-    const c = e.campos || {}, t = e.termos || [];
-    const valores = COLS.map(col => col[1](c, t));
-    if (!valores.some(v => v !== '')) { vazias++; return; }
-    linhas.push([d.item_id_colecao].concat(valores).map(cel).join(','));
+// Estrutura da coleção, lida do Memória SPU; em caso de falha, a de reserva.
+async function estruturaDaColecao(){
+  try {
+    const ler = async caminho => {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 20000);
+      try {
+        const resp = await fetch(TAINACAN_API + caminho, { signal: ctl.signal });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return await resp.json();
+      } finally { clearTimeout(t); }
+    };
+    const [md, col] = await Promise.all([
+      ler('/collection/' + TAINACAN_COLECAO + '/metadata?perpage=100'),
+      ler('/collections/' + TAINACAN_COLECAO + '?fetch_only=metadata_order'),
+    ]);
+    const porId = {}; md.forEach(m => porId[String(m.id)] = m);
+    const ordem = (col.metadata_order || []).filter(o => o.enabled !== false).map(o => String(o.id));
+    const seq = ordem.filter(id => porId[id]).map(id => porId[id])
+      .concat(md.filter(m => ordem.indexOf(String(m.id)) === -1));
+    if (!seq.length) throw new Error('a coleção não devolveu metadados');
+    return { aoVivo: true, metadados: seq.map(m => ({
+      rotulo: m.name, tipo: String(m.metadata_type || '').split('\\').pop(),
+      multiplo: m.multiple === 'yes' })) };
+  } catch (e) {
+    return { aoVivo: false, erro: String(e && e.message || e), metadados: ESTRUTURA_CSV_RESERVA };
+  }
+}
+
+async function exportarCSV(){
+  const [estrutura, rEtapas, rDocs, rPlan, rRel] = await Promise.all([
+    estruturaDaColecao(),
+    sb.from('etapas_revisao').select('documento_id,campos,termos,criado_em').limit(3000),
+    sb.from('documentos')
+      .select('id,item_id_tainacan,item_id_colecao,lote,fora_de_escopo,titulo,tipo_norma,ementa,' +
+              'numero_norma,situacao_norma,ano_publicacao,data_assinatura,data_publicacao,orgao_edicao')
+      .eq('colecao_id', colecaoId).limit(2000),
+    sb.from('planilha_sync').select('item_id,sigla_unidade,sigla_unidade_2,orgao_2').limit(2000),
+    sb.from('relacoes_norma').select('origem_id,destino_id').eq('tipo', 'revoga')
+      .eq('status', 'confirmada').limit(3000),
+  ]);
+  const docs = rDocs.data || [];
+  if (rDocs.error || !docs.length) { alert('Não foi possível ler as normas para exportar.'); return; }
+
+  const etapaDe = {};
+  (rEtapas.data || []).forEach(e => {
+    const a = etapaDe[e.documento_id];
+    if (!a || a.criado_em < e.criado_em) etapaDe[e.documento_id] = e;
+  });
+  const planDe = {}; (rPlan.data || []).forEach(p => planDe[p.item_id] = p);
+  const docPorId = {}, idNaColecao = {};
+  docs.forEach(d => {
+    docPorId[d.id] = d;
+    if (d.item_id_tainacan && d.item_id_colecao) idNaColecao[String(d.item_id_tainacan)] = d.item_id_colecao;
+  });
+  // "Revogado por": a revogação confirmada vale para a norma revogada mesmo que a ficha
+  // DELA nunca tenha sido aberta — a confirmação pode ter sido feita pelo lado de quem revoga
+  const revogadoPor = {};
+  (rRel.data || []).forEach(x => {
+    const o = docPorId[x.origem_id];
+    if (o && o.item_id_tainacan) (revogadoPor[x.destino_id] = revogadoPor[x.destino_id] || [])
+      .push(String(o.item_id_tainacan));
   });
 
-  if (linhas.length === 1){ alert('Nada indexado com id da coleção para exportar.'); return; }
+  // Entram as normas dos lotes liberados: é onde o cadastro é o da planilha auditada.
+  const liberados = Array.isArray(config.lotes_liberados) ? config.lotes_liberados.map(String) : [];
+  const registros = docs
+    .filter(d => !d.fora_de_escopo && d.lote && (!liberados.length || liberados.indexOf(String(d.lote)) !== -1))
+    .sort((a, b) => (a.item_id_colecao || 0) - (b.item_id_colecao || 0))
+    .map(d => {
+      const e = etapaDe[d.id] || {};
+      return { doc: d, campos: e.campos || {}, termos: e.termos || [],
+               plan: planDe[d.item_id_tainacan] || {}, revogadoPor: revogadoPor[d.id] || [] };
+    });
 
-  const blob = new Blob([linhas.join('\r\n') + '\r\n'], { type:'text/csv;charset=utf-8' });
+  const { matriz, fora, semFonte } = montarCsvColecao(estrutura.metadados, registros, idNaColecao);
+  if (matriz.length === 1) { alert('Nenhuma norma de lote tem id da coleção para exportar.'); return; }
+
+  const blob = new Blob([csvTexto(matriz)], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'memoria_spu_indexacao_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.download = 'memoria_spu_' + new Date().toISOString().slice(0, 10) + '.csv';
   a.click();
 
-  const fora = [];
-  if (semId) fora.push(semId + ' sem id da coleção');
-  if (recusadas) fora.push(recusadas + ' recusadas na triagem');
-  if (vazias) fora.push(vazias + ' sem nenhum campo preenchido');
-  alert((linhas.length - 1) + ' fichas no arquivo.' +
-    (fora.length ? '\n\nFicaram de fora: ' + fora.join(', ') + '.' : '') +
-    '\n\nNa tela do importador: Item repetido = Atualizar, Codificação = UTF-8 (nunca ' +
-    '"Automática"), delimitador "," e multivalorado "||". Mapeie cada coluna para o ' +
-    'metadado EXISTENTE — nunca "Criar metadado".' +
-    '\n\nNão abra nem salve este arquivo no Excel antes de importar.');
+  const msg = [(matriz.length - 1) + ' fichas no arquivo, com ' + estrutura.metadados.length +
+               ' metadados na ordem da coleção.'];
+  msg.push(estrutura.aoVivo
+    ? 'Estrutura lida agora do Memória SPU.'
+    : 'ATENÇÃO: não foi possível ler a estrutura do Memória SPU (' + estrutura.erro +
+      '). Usei a estrutura de reserva, de 20/11/2026 — confira se a coleção não mudou.');
+  const ficou = [];
+  if (fora.semId) ficou.push(fora.semId + ' normas sem id da coleção (não entram: criariam item novo)');
+  if (fora.relSemId) ficou.push(fora.relSemId + ' normas relacionadas ainda sem id da coleção');
+  Object.keys(fora.naoCoube).forEach(k =>
+    ficou.push(fora.naoCoube[k] + ' fichas com mais de um valor em "' + k +
+               '", que é de valor único na coleção — foi só o primeiro'));
+  if (fora.numeroInvalido) ficou.push(fora.numeroInvalido + ' valores não numéricos em campo numérico');
+  if (fora.dataInvalida) ficou.push(fora.dataInvalida + ' datas fora de dd/mm/aaaa');
+  if (ficou.length) msg.push('Ficou de fora:\n· ' + ficou.join('\n· '));
+  if (semFonte.length) msg.push('Colunas vazias (o Indexador não tem esse dado): ' + semFonte.join(', ') + '.');
+  msg.push('No importador: Item repetido = Atualizar · Codificação = UTF-8 (nunca "Automática") · ' +
+           'delimitador "," · multivalorado "||". Mapeie cada coluna para o metadado EXISTENTE, ' +
+           'nunca "Criar metadado".');
+  msg.push('Não abra nem salve este arquivo no Excel antes de importar.');
+  alert(msg.join('\n\n'));
 }
 
 iniciar();
