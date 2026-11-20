@@ -27,6 +27,42 @@ header h1 { margin:0; font-family:"Fraunces",serif; font-weight:600; font-size:2
 header p { margin:4px 0 0; color:#bcd2c6; font-size:12px; letter-spacing:.6px; text-transform:uppercase; }
 main { max-width:1460px; margin:0 auto; padding:22px 28px 70px; }
 .hidden { display:none !important; }
+
+/* Abas de fichário: ficam presas à borda de baixo da faixa verde, e a ativa tem a cor do
+   papel — parece continuar na página, como a aba de uma pasta. */
+header.com-abas { padding-bottom:0; border-bottom:none; }
+.abas { max-width:1460px; margin:16px auto 0; display:flex; gap:6px; align-items:flex-end; }
+.aba { font-family:"Fraunces",serif; font-weight:600; font-size:15px; cursor:pointer;
+  padding:10px 22px 11px; border:none; border-radius:12px 12px 0 0;
+  background:rgba(255,255,255,.13); color:#dcebe3; border-top:3px solid transparent; }
+.aba:hover { background:rgba(255,255,255,.22); color:#fff; }
+.aba.ativa { background:var(--ice); color:var(--accent-dark); border-top-color:var(--terra); }
+.aba:focus-visible { outline:2px solid #fff; outline-offset:-4px; }
+
+.exp-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:18px; }
+.exp-cartao { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px;
+  box-shadow:var(--sombra); border-top:4px solid var(--accent); display:flex; flex-direction:column; }
+.exp-cartao.sec { border-top-color:var(--terra); }
+.exp-cartao h3 { font-family:"Fraunces",serif; font-weight:600; font-size:18px; margin:0 0 4px; }
+.exp-cartao .para { font-size:12px; letter-spacing:.5px; text-transform:uppercase; color:var(--muted); margin:0 0 12px; }
+.exp-cartao p { font-size:14px; line-height:1.6; margin:0 0 10px; }
+.exp-cartao ul { margin:0 0 14px; padding-left:18px; font-size:13.5px; line-height:1.6; color:var(--ink); }
+.exp-cartao .b { margin-top:auto; align-self:flex-start; }
+.exp-aviso { background:var(--warn-bg); color:var(--warn); border-radius:10px; padding:10px 13px;
+  font-size:13.5px; line-height:1.55; margin:0 0 14px; }
+.exp-resultado { background:var(--ok-bg); border:1px solid var(--line); border-radius:14px; padding:16px 18px;
+  margin-bottom:18px; font-size:14px; line-height:1.6; }
+.exp-resultado.alerta { background:var(--warn-bg); }
+.exp-resultado b.num { font-family:"Fraunces",serif; font-size:17px; }
+.exp-resultado ul { margin:6px 0 0; padding-left:18px; }
+.exp-saber { font-size:14px; line-height:1.65; }
+.exp-saber li { margin-bottom:6px; }
+details.exp-tec { margin-top:6px; font-size:13.5px; line-height:1.6; }
+details.exp-tec summary { cursor:pointer; color:var(--accent); font-weight:600; }
+/* a altura desconta a faixa do topo, as margens e a linha de baixo: o manual foi feito para
+   caber numa tela só, e a página em volta não pode rolar por causa dele */
+#manualQuadro { width:100%; height:calc(100vh - 250px); min-height:480px; border:1px solid var(--line);
+  border-radius:16px; background:var(--card); box-shadow:var(--sombra); display:block; }
 .who { font-size:12.5px; color:#bcd2c6; }
 .who b { color:#fff; }
 .who button { background:none; border:1px solid rgba(255,255,255,.35); color:#fff; cursor:pointer; padding:6px 12px;
@@ -199,7 +235,13 @@ select.tp:hover { border-color:var(--terra); }
     <h1>Indexador - MemóriaSPU - Legislação Patrimonial</h1>
   </div>
   <div class="who" id="who"></div>
-</div></header>
+</div>
+<nav class="abas hidden" id="abas" role="tablist" aria-label="Seções do Indexador">
+  <button class="aba ativa" role="tab" id="abaBtn-indexacao" aria-selected="true" onclick="mostrarAba('indexacao')">Indexação</button>
+  <button class="aba" role="tab" id="abaBtn-exportacao" aria-selected="false" onclick="mostrarAba('exportacao')">Exportação</button>
+  <button class="aba" role="tab" id="abaBtn-manual" aria-selected="false" onclick="mostrarAba('manual')">Manual</button>
+</nav>
+</header>
 
 <main>
   <div id="gate" class="gate">
@@ -218,6 +260,7 @@ select.tp:hover { border-color:var(--terra); }
   </div>
 
   <div id="app" class="hidden">
+   <div id="aba-indexacao">
     <div id="telaFila">
       <div class="card">
         <h2 class="sec">Fila de revisão</h2>
@@ -243,10 +286,6 @@ select.tp:hover { border-color:var(--terra); }
           </select>
           <button class="b sec" onclick="abrirPainel()"
                   title="andamento do trabalho, dúvidas e observações">Painel</button>
-          <button class="b sec" onclick="exportarExcel()"
-                  title="planilha completa para a equipe: inclui o que não cabe no CSV — correções propostas, observações, dúvidas e recusas">Exportar Excel</button>
-          <button class="b sec" onclick="exportarCSV()"
-                  title="CSV pronto para o importador do Tainacan: todos os metadados da coleção, na ordem dela, para as normas dos lotes liberados">Exportar CSV</button>
                     <span id="filaInfo" style="color:var(--muted);font-size:12.5px;margin-left:auto"></span>
         </div>
         <div id="novaNorma" class="hidden" style="border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff">
@@ -290,6 +329,72 @@ select.tp:hover { border-color:var(--terra); }
         <div class="card"><div class="ficha" id="ficha"></div></div>
       </div>
     </div>
+   </div>
+
+   <div id="aba-exportacao" class="hidden">
+    <div id="expResultado"></div>
+    <div class="exp-grade">
+      <div class="exp-cartao">
+        <h3>Arquivo para o Memória SPU</h3>
+        <p class="para">formato CSV · para importar</p>
+        <p>É o arquivo que a equipe do repositório carrega no Memória SPU. Ele leva, de cada
+           norma, o cadastro conferido e o que foi indexado aqui, já na ordem e com os nomes
+           dos campos que o Memória SPU usa.</p>
+        <ul>
+          <li>Entram as normas dos lotes liberados que já têm ficha no Memória SPU.</li>
+          <li>Campo que ficar em branco não apaga nada lá: a ficha continua como está.</li>
+        </ul>
+        <div class="exp-aviso"><b>Não abra nem salve este arquivo no Excel</b> antes de enviar.
+          O Excel troca o formato das datas, e elas chegam erradas ao Memória SPU.</div>
+        <button class="b" id="btnExpCsv" onclick="exportarCSV()">Baixar o arquivo CSV</button>
+      </div>
+      <div class="exp-cartao sec">
+        <h3>Planilha de acompanhamento</h3>
+        <p class="para">formato Excel · para ler e conferir</p>
+        <p>É a mesma lista de normas, com os mesmos campos, feita para abrir e ler. Traz a mais
+           o que só interessa a quem acompanha o trabalho.</p>
+        <ul>
+          <li>Diz, norma por norma, se ela entrou no arquivo do Memória SPU e por quê.</li>
+          <li>Observações, dúvidas e normas recusadas na triagem.</li>
+          <li>Em outra aba, as correções de cadastro propostas por quem indexou.</li>
+        </ul>
+        <button class="b sec" id="btnExpXlsx" onclick="exportarExcel()">Baixar a planilha Excel</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2 class="sec">O que vale saber</h2>
+      <ul class="exp-saber">
+        <li><b>Os dois arquivos saem do mesmo lugar.</b> O que está no CSV está na planilha,
+            campo por campo. A planilha só tem colunas a mais, no fim.</li>
+        <li><b>O arquivo acompanha o Memória SPU.</b> A cada vez que você baixa, a ferramenta
+            consulta quais campos a coleção tem e em que ordem. Se a equipe do repositório
+            criar ou mudar um campo, o arquivo já sai do jeito novo.</li>
+        <li><b>Algumas normas ficam de fora, e a ferramenta diz quais.</b> O motivo mais comum
+            é a norma ainda não ter ficha identificada no Memória SPU. Mandá-la assim criaria
+            uma ficha repetida.</li>
+        <li><b>Na primeira carga, vale testar com poucas linhas</b> e conferir no Memória SPU
+            antes de mandar o arquivo inteiro.</li>
+      </ul>
+      <details class="exp-tec">
+        <summary>Para quem faz a importação no Memória SPU</summary>
+        <ul>
+          <li>Item repetido: <b>Atualizar</b>.</li>
+          <li>Codificação: <b>UTF-8</b> (não deixar em «Automática»).</li>
+          <li>Delimitador de coluna: <b>vírgula</b>. Delimitador de valores múltiplos: <b>||</b>.</li>
+          <li>Mapear cada coluna para o campo que <b>já existe</b>. Nunca «Criar metadado».</li>
+          <li>Termos de assunto, regime ou situação que ainda não existirem na coleção são
+              criados pela importação. Vale combinar antes.</li>
+        </ul>
+      </details>
+    </div>
+   </div>
+
+   <div id="aba-manual" class="hidden">
+    <iframe id="manualQuadro" title="Manual do Indexador" loading="lazy"></iframe>
+    <p class="ajuda" style="margin-top:8px">Prefere em tela cheia?
+      <a href="manual.html" target="_blank" rel="noopener">Abrir o manual em outra aba</a>.</p>
+   </div>
   </div>
 </main>
 
@@ -622,6 +727,8 @@ async function entrar(id, nome){
   usuario = { id, nome };
   document.getElementById('gate').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
+  document.getElementById('abas').classList.remove('hidden');
+  document.querySelector('header').classList.add('com-abas');
   document.getElementById('who').innerHTML =
     `<b>${esc(nome)}</b><button onclick="sair()">sair</button>`;
   await carregarBase();
@@ -629,6 +736,29 @@ async function entrar(id, nome){
 }
 
 async function sair(){ await sb.auth.signOut(); location.reload(); }
+
+/* ---------- abas (20/11/2026): Indexação · Exportação · Manual
+   Trocar de aba só esconde e mostra — nada é recarregado. Quem está no meio de uma ficha,
+   vai ao Manual e volta, encontra a ficha como deixou.
+   O manual é outro arquivo (`manual.html`, publicado ao lado deste) dentro de um quadro:
+   ele tem estilo e script próprios, e o quadro impede que um interfira no outro. Só é
+   carregado na primeira vez que a aba é aberta. */
+const ABAS = ['indexacao', 'exportacao', 'manual'];
+function mostrarAba(nome){
+  if (ABAS.indexOf(nome) === -1) nome = 'indexacao';
+  ABAS.forEach(a => {
+    const ativa = a === nome;
+    document.getElementById('aba-' + a).classList.toggle('hidden', !ativa);
+    const b = document.getElementById('abaBtn-' + a);
+    b.classList.toggle('ativa', ativa);
+    b.setAttribute('aria-selected', ativa ? 'true' : 'false');
+  });
+  if (nome === 'manual') {
+    const q = document.getElementById('manualQuadro');
+    if (!q.getAttribute('src')) q.setAttribute('src', 'manual.html');
+  }
+  return nome;
+}
 
 /* ---------- base ---------- */
 async function carregarBase(){
@@ -3012,9 +3142,9 @@ async function baixarDocx(documentoXml, nome){
 }
 
 /* ---------- export ----------
-   Decisão de 24/08/2026: o Indexador entrega uma PLANILHA EXCEL. A equipe do repositório
-   faz os tratamentos e produz o CSV de carga do Tainacan — a ferramenta não assume os
-   parâmetros técnicos daquele formato.
+   Decisão de 24/08/2026, REVISTA em 19 e 20/11/2026: o Indexador entregava só uma planilha
+   Excel, e a equipe do repositório produzia o CSV de carga. Hoje a ferramenta entrega os
+   dois, montados da mesma base — ver «os dois arquivos saem da MESMA base», mais abaixo.
 
    Duas abas, porque são duas naturezas: o que a equipe jurídica INDEXOU, e o que ela
    PROPÔS corrigir no cadastro. Misturar as duas na mesma aba faria a proposta parecer
@@ -3088,76 +3218,6 @@ async function baixarXlsx(abas, nome){
 function motivoDaRecusa(e){
   const c = (e && e.campos) || {};
   return (e && e.motivo_recusa) || c.motivo || c.motivo_recusa || '';
-}
-
-async function exportarExcel(){
-  /* `patrimonial` e `motivo_recusa` precisam vir no select. Sem eles as duas colunas da
-     recusa saíam SEMPRE vazias: `e.patrimonial === false` nunca era verdadeiro porque o
-     campo não chegava, e o motivo era lido de `campos.motivo_recusa`, chave que a
-     gravação da recusa nunca escreveu — ela grava `motivo_recusa` na coluna e `motivo`
-     dentro de `campos`. Medido em 14/09/2026: 16 recusas, 7 com motivo escrito, 0 no Excel. */
-  const { data: etapas } = await sb.from('etapas_revisao')
-    .select('documento_id,estagio,campos,termos,criado_em,usuario_id,patrimonial,motivo_recusa').limit(2000);
-  // `em_duvida` e `duvida_nota` entram aqui pelo mesmo motivo que `patrimonial` entrou em
-  // setembro: coluna que não vem no select sai sempre vazia na planilha, e quem lê conclui
-  // que ninguém escreveu nada.
-  const { data: docs } = await sb.from('documentos')
-    .select('id,item_id_tainacan,titulo,lote,em_duvida,duvida_nota').eq('colecao_id', colecaoId).limit(1000);
-  const { data: props } = await sb.from('v_propostas_cadastro_vigentes')
-    .select('documento_id,campo,valor_atual,valor_proposto,usuario_id,criado_em');
-
-  const porDoc = {};
-  (etapas||[]).forEach(e => {
-    const a = porDoc[e.documento_id];
-    if (!a || a.criado_em < e.criado_em) porDoc[e.documento_id] = e;
-  });
-  const porId = {}; (docs||[]).forEach(d => porId[d.id] = d);
-
-  const colsIdx = ['special_item_id','Lote','Título','Assunto','assunto_taxonomia_2','assunto_taxonomia_3',
-    'regime_destinacao','regime_aquisicao','Palavra-chave','Situação da Norma','data_inicio_vigencia',
-    'Ato de Revogação','Revogado em','Norma de regulamentação','Ato de alteração','Legislação Relacionada',
-    'Relação a esclarecer',
-    'Não é norma patrimonial','Motivo da recusa','Observações','Marcada com dúvida','Dúvida — qual',
-    'Revisado por','Revisado em'];
-  const idx = [colsIdx];
-  (docs||[]).forEach(d => {
-    /* Entra quem tem ficha E TAMBÉM quem só está marcado com dúvida. A marcação de dúvida
-       grava direto em `documentos` e não depende de salvar a ficha — exigir etapa deixaria
-       de fora exatamente a norma que alguém parou de indexar porque tinha uma dúvida, que
-       é a que mais precisa chegar a quem pode resolvê-la. Linha sem ficha sai com as
-       colunas de indexação vazias, que é o retrato fiel: ninguém indexou. */
-    const e = porDoc[d.id] || (d.em_duvida ? { campos: {}, termos: [] } : null);
-    if (!e) return;
-    const c = e.campos || {}, cam = c.assuntos_caminho || [];
-    const pcs = (e.termos||[]).filter(t => t.decisao !== 'rejeitado').map(t => t.termo).join('||');
-    idx.push([ d.item_id_tainacan||'', d.lote||'', d.titulo||'',
-      cam[0]||'', cam[1]||'', cam[2]||'', c.regime_destinacao||'', c.regime_aquisicao||'', pcs,
-      c.situacao_norma||'', c.data_inicio_vigencia||'', c.ato_revogacao||'', c.revogado_em||'',
-      c.norma_regulamentacao||'', c.ato_alteracao||'', c.legislacao_relacionada||'',
-      // coluna separada de propósito: é dúvida a esclarecer, não vínculo estabelecido
-      c.relacao_a_esclarecer||'',
-      e.patrimonial === false ? 'sim' : '', motivoDaRecusa(e),
-      // a observação vive na ficha (etapas_revisao.campos); a dúvida, no documento
-      c.observacoes || '', d.em_duvida ? 'sim' : '',
-      // o texto só sai com a dúvida marcada: desmarcar não apaga a nota, e exibi-la assim
-      // faria a planilha pedir solução para uma dúvida que a pessoa já retirou
-      d.em_duvida ? (d.duvida_nota || '') : '',
-      // linha sem ficha não tem revisor: `nomeDe(undefined)` diria "autor não identificado",
-      // que afirma que alguém revisou e não se sabe quem — o contrário do que aconteceu
-      e.usuario_id ? nomeDe(e.usuario_id) : '', dataCurta(e.criado_em) ]);
-  });
-
-  const corr = [['special_item_id','Título','Campo','Valor atual','Valor proposto','Proposto por','Proposto em']];
-  (props||[]).forEach(p => {
-    const d = porId[p.documento_id]; if (!d) return;
-    corr.push([ d.item_id_tainacan||'', d.titulo||'', p.campo,
-      p.valor_atual||'', p.valor_proposto||'', nomeDe(p.usuario_id), dataCurta(p.criado_em) ]);
-  });
-
-  if (idx.length === 1 && corr.length === 1) { alert('Nada indexado ainda para exportar.'); return; }
-  await baixarXlsx([{ nome:'Indexação', linhas: idx },
-                    { nome:'Correções propostas', linhas: corr }],
-                   'indexacao_memoria_spu.xlsx');
 }
 
 /* ---------- export CSV para o importador do Tainacan — segunda versão (20/11/2026)
@@ -3260,14 +3320,16 @@ function fonteDoMetadado(rotulo){
    registros: [{doc, campos, termos, plan, revogadoPor}]
    idNaColecao: { id antigo -> id na coleção }, para os campos de relacionamento
    Devolve a matriz (cabeçalho + linhas) e a contagem do que ficou de fora, por motivo. */
-function montarCsvColecao(estrutura, registros, idNaColecao){
+function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
+  // `incluirSemId` é para a planilha de acompanhamento, que mostra também quem ficou fora
+  const incluirSemId = !!(opcoes && opcoes.incluirSemId);
   const fora = { semId: 0, naoCoube: {}, relSemId: 0, numeroInvalido: 0, dataInvalida: 0 };
   const semFonte = estrutura.filter(m => !fonteDoMetadado(m.rotulo)).map(m => m.rotulo);
   const matriz = [['special_item_id'].concat(estrutura.map(m => m.rotulo))];
 
   registros.forEach(r => {
-    if (!r.doc.item_id_colecao) { fora.semId++; return; }
-    const linha = [String(r.doc.item_id_colecao)];
+    if (!r.doc.item_id_colecao) { fora.semId++; if (!incluirSemId) return; }
+    const linha = [r.doc.item_id_colecao ? String(r.doc.item_id_colecao) : ''];
     estrutura.forEach(m => {
       const fonte = fonteDoMetadado(m.rotulo);
       if (!fonte) { linha.push(''); return; }
@@ -3334,20 +3396,32 @@ async function estruturaDaColecao(){
   }
 }
 
-async function exportarCSV(){
-  const [estrutura, rEtapas, rDocs, rPlan, rRel] = await Promise.all([
+/* ---------- os dois arquivos saem da MESMA base (20/11/2026)
+
+   Até aqui o Excel e o CSV eram montados cada um por sua conta, e por isso divergiam: o
+   Excel levava o id do acervo antigo, três colunas de assunto e nomes de coluna da
+   planilha da equipe; o CSV, o id da coleção e os metadados do Memória SPU. Agora os dois
+   leem os dados uma vez só (`dadosParaExportar`) e passam pela mesma função
+   (`montarCsvColecao`). A planilha É o CSV, linha por linha e coluna por coluna, com
+   colunas a mais no fim — e com as normas que ficaram fora do CSV, marcadas como tal. */
+async function dadosParaExportar(){
+  const [estrutura, rEtapas, rDocs, rPlan, rRel, rProps] = await Promise.all([
     estruturaDaColecao(),
-    sb.from('etapas_revisao').select('documento_id,campos,termos,criado_em').limit(3000),
+    sb.from('etapas_revisao')
+      .select('documento_id,campos,termos,criado_em,usuario_id,patrimonial,motivo_recusa').limit(3000),
     sb.from('documentos')
       .select('id,item_id_tainacan,item_id_colecao,lote,fora_de_escopo,titulo,tipo_norma,ementa,' +
-              'numero_norma,situacao_norma,ano_publicacao,data_assinatura,data_publicacao,orgao_edicao')
+              'numero_norma,situacao_norma,ano_publicacao,data_assinatura,data_publicacao,' +
+              'orgao_edicao,em_duvida,duvida_nota')
       .eq('colecao_id', colecaoId).limit(2000),
     sb.from('planilha_sync').select('item_id,sigla_unidade,sigla_unidade_2,orgao_2').limit(2000),
     sb.from('relacoes_norma').select('origem_id,destino_id').eq('tipo', 'revoga')
       .eq('status', 'confirmada').limit(3000),
+    sb.from('v_propostas_cadastro_vigentes')
+      .select('documento_id,campo,valor_atual,valor_proposto,usuario_id,criado_em'),
   ]);
   const docs = rDocs.data || [];
-  if (rDocs.error || !docs.length) { alert('Não foi possível ler as normas para exportar.'); return; }
+  if (rDocs.error || !docs.length) return { erro: 'Não foi possível ler as normas para exportar.' };
 
   const etapaDe = {};
   (rEtapas.data || []).forEach(e => {
@@ -3370,46 +3444,125 @@ async function exportarCSV(){
   });
 
   // Entram as normas dos lotes liberados: é onde o cadastro é o da planilha auditada.
+  // Primeiro as que têm id da coleção, na ordem dele; depois as que ainda não têm.
   const liberados = Array.isArray(config.lotes_liberados) ? config.lotes_liberados.map(String) : [];
   const registros = docs
     .filter(d => !d.fora_de_escopo && d.lote && (!liberados.length || liberados.indexOf(String(d.lote)) !== -1))
-    .sort((a, b) => (a.item_id_colecao || 0) - (b.item_id_colecao || 0))
+    .sort((a, b) => (a.item_id_colecao || Infinity) - (b.item_id_colecao || Infinity)
+                    || String(a.titulo).localeCompare(String(b.titulo), 'pt'))
     .map(d => {
-      const e = etapaDe[d.id] || {};
-      return { doc: d, campos: e.campos || {}, termos: e.termos || [],
-               plan: planDe[d.item_id_tainacan] || {}, revogadoPor: revogadoPor[d.id] || [] };
+      const e = etapaDe[d.id] || null;
+      return { doc: d, campos: (e && e.campos) || {}, termos: (e && e.termos) || [],
+               plan: planDe[d.item_id_tainacan] || {}, revogadoPor: revogadoPor[d.id] || [],
+               extra: {
+                 lote: d.lote || '', idAntigo: d.item_id_tainacan || '',
+                 recusada: !!e && e.patrimonial === false, motivo: e ? motivoDaRecusa(e) : '',
+                 duvida: !!d.em_duvida, duvidaNota: d.em_duvida ? (d.duvida_nota || '') : '',
+                 por: e && e.usuario_id ? nomeDe(e.usuario_id) : '',
+                 em: e ? dataCurta(e.criado_em) : '' } };
     });
+  return { estrutura, registros, idNaColecao, docPorId, propostas: rProps.data || [] };
+}
 
-  const { matriz, fora, semFonte } = montarCsvColecao(estrutura.metadados, registros, idNaColecao);
-  if (matriz.length === 1) { alert('Nenhuma norma de lote tem id da coleção para exportar.'); return; }
+/* A planilha: as colunas do CSV, idênticas, e depois o que só serve a quem acompanha.
+   Função pura — os testes conferem que a parte comum é igual à do CSV. */
+const COLUNAS_SO_DA_PLANILHA = ['Entra no arquivo do Memória SPU?', 'Lote', 'Id no acervo antigo',
+  'Norma de regulamentação', 'Ato de alteração', 'Relação a esclarecer', 'Não é norma patrimonial',
+  'Motivo da recusa', 'Observações', 'Marcada com dúvida', 'Dúvida — qual', 'Indexado por', 'Indexado em'];
+function linhasDaPlanilha(estrutura, registros, idNaColecao){
+  const base = montarCsvColecao(estrutura, registros, idNaColecao, { incluirSemId: true });
+  const ids = v => [...new Set(partes(v, '||').map(x => idNaColecao[x]).filter(Boolean).map(String))].join('||');
+  const matriz = [base.matriz[0].concat(COLUNAS_SO_DA_PLANILHA)];
+  registros.forEach((r, i) => {
+    const x = r.extra || {}, c = r.campos || {};
+    matriz.push(base.matriz[i + 1].concat([
+      r.doc.item_id_colecao ? 'sim' : 'não — ainda sem ficha identificada no Memória SPU',
+      x.lote || '', x.idAntigo ? String(x.idAntigo) : '',
+      ids(c.norma_regulamentacao), ids(c.ato_alteracao), ids(c.relacao_a_esclarecer),
+      x.recusada ? 'sim' : '', x.motivo || '', c.observacoes || '',
+      x.duvida ? 'sim' : '', x.duvidaNota || '', x.por || '', x.em || '' ]));
+  });
+  return matriz;
+}
 
-  const blob = new Blob([csvTexto(matriz)], { type: 'text/csv;charset=utf-8' });
+function mostrarResultadoExport(html, alerta){
+  const el = document.getElementById('expResultado');
+  if (el) el.innerHTML = '<div class="exp-resultado' + (alerta ? ' alerta' : '') + '">' + html + '</div>';
+}
+// O que ficou de fora, em palavras de quem indexa — sem jargão do importador.
+function resumoDoQueFicouDeFora(fora){
+  const li = [];
+  if (fora.semId) li.push('<b>' + fora.semId + '</b> normas ainda sem ficha identificada no Memória SPU. ' +
+    'Não entram no CSV, para não criar ficha repetida.');
+  if (fora.relSemId) li.push('<b>' + fora.relSemId + '</b> citações a normas relacionadas que ainda não ' +
+    'têm ficha identificada no Memória SPU.');
+  Object.keys(fora.naoCoube).forEach(k => li.push('<b>' + fora.naoCoube[k] + '</b> normas têm mais de um ' +
+    'valor em «' + esc(k) + '», e esse campo só aceita um no Memória SPU. Foi o primeiro.'));
+  if (fora.numeroInvalido) li.push('<b>' + fora.numeroInvalido + '</b> número de norma que não é só dígitos.');
+  if (fora.dataInvalida) li.push('<b>' + fora.dataInvalida + '</b> datas fora do formato dia/mês/ano.');
+  return li;
+}
+async function comBotaoOcupado(id, fazer){
+  const b = document.getElementById(id), rotulo = b ? b.textContent : '';
+  if (b) { b.disabled = true; b.textContent = 'Preparando…'; }
+  try { await fazer(); }
+  catch (e) { mostrarResultadoExport('Não foi possível gerar o arquivo. Nada foi baixado.<br>' +
+                '<span class="ajuda">' + esc(String(e && e.message || e)) + '</span>', true); }
+  finally { if (b) { b.disabled = false; b.textContent = rotulo; } }
+}
+function baixarTexto(texto, nome, tipo){
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'memoria_spu_' + new Date().toISOString().slice(0, 10) + '.csv';
-  a.click();
+  a.href = URL.createObjectURL(new Blob([texto], { type: tipo }));
+  a.download = nome; a.click();
+}
 
-  const msg = [(matriz.length - 1) + ' fichas no arquivo, com ' + estrutura.metadados.length +
-               ' metadados na ordem da coleção.'];
-  msg.push(estrutura.aoVivo
-    ? 'Estrutura lida agora do Memória SPU.'
-    : 'ATENÇÃO: não foi possível ler a estrutura do Memória SPU (' + estrutura.erro +
-      '). Usei a estrutura de reserva, de 20/11/2026 — confira se a coleção não mudou.');
-  const ficou = [];
-  if (fora.semId) ficou.push(fora.semId + ' normas sem id da coleção (não entram: criariam item novo)');
-  if (fora.relSemId) ficou.push(fora.relSemId + ' normas relacionadas ainda sem id da coleção');
-  Object.keys(fora.naoCoube).forEach(k =>
-    ficou.push(fora.naoCoube[k] + ' fichas com mais de um valor em "' + k +
-               '", que é de valor único na coleção — foi só o primeiro'));
-  if (fora.numeroInvalido) ficou.push(fora.numeroInvalido + ' valores não numéricos em campo numérico');
-  if (fora.dataInvalida) ficou.push(fora.dataInvalida + ' datas fora de dd/mm/aaaa');
-  if (ficou.length) msg.push('Ficou de fora:\n· ' + ficou.join('\n· '));
-  if (semFonte.length) msg.push('Colunas vazias (o Indexador não tem esse dado): ' + semFonte.join(', ') + '.');
-  msg.push('No importador: Item repetido = Atualizar · Codificação = UTF-8 (nunca "Automática") · ' +
-           'delimitador "," · multivalorado "||". Mapeie cada coluna para o metadado EXISTENTE, ' +
-           'nunca "Criar metadado".');
-  msg.push('Não abra nem salve este arquivo no Excel antes de importar.');
-  alert(msg.join('\n\n'));
+async function exportarExcel(){
+  await comBotaoOcupado('btnExpXlsx', async () => {
+    const d = await dadosParaExportar();
+    if (d.erro) { mostrarResultadoExport(esc(d.erro), true); return; }
+    const normas = linhasDaPlanilha(d.estrutura.metadados, d.registros, d.idNaColecao);
+    const corr = [['special_item_id', 'Id no acervo antigo', 'Título', 'Campo', 'Valor atual',
+                   'Valor proposto', 'Proposto por', 'Proposto em']];
+    d.propostas.forEach(p => {
+      const doc = d.docPorId[p.documento_id]; if (!doc) return;
+      corr.push([ doc.item_id_colecao || '', doc.item_id_tainacan || '', doc.titulo || '', p.campo,
+        p.valor_atual || '', p.valor_proposto || '', nomeDe(p.usuario_id), dataCurta(p.criado_em) ]);
+    });
+    await baixarXlsx([{ nome: 'Normas', linhas: normas }, { nome: 'Correções propostas', linhas: corr }],
+                     'memoria_spu_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+    const noCsv = d.registros.filter(r => r.doc.item_id_colecao).length;
+    mostrarResultadoExport('<b class="num">Planilha gerada.</b> ' + (normas.length - 1) + ' normas na aba ' +
+      '«Normas»: ' + noCsv + ' que entram no arquivo do Memória SPU e ' + (normas.length - 1 - noCsv) +
+      ' que ainda não entram, marcadas na coluna própria. ' + (corr.length - 1) +
+      ' correções propostas na segunda aba.' +
+      (d.estrutura.aoVivo ? '' : '<br><b>Atenção:</b> não consegui consultar os campos do Memória SPU ' +
+       'agora; usei a lista guardada em 20/11/2026.'), !d.estrutura.aoVivo);
+  });
+}
+
+async function exportarCSV(){
+  await comBotaoOcupado('btnExpCsv', async () => {
+    const d = await dadosParaExportar();
+    if (d.erro) { mostrarResultadoExport(esc(d.erro), true); return; }
+    const { matriz, fora, semFonte } = montarCsvColecao(d.estrutura.metadados, d.registros, d.idNaColecao);
+    if (matriz.length === 1) {
+      mostrarResultadoExport('Nenhuma norma dos lotes liberados tem ficha identificada no Memória SPU. ' +
+        'Nada foi baixado.', true);
+      return;
+    }
+    baixarTexto(csvTexto(matriz), 'memoria_spu_' + new Date().toISOString().slice(0, 10) + '.csv',
+                'text/csv;charset=utf-8');
+    const li = resumoDoQueFicouDeFora(fora);
+    mostrarResultadoExport(
+      '<b class="num">Arquivo gerado.</b> ' + (matriz.length - 1) + ' normas, com os ' +
+      d.estrutura.metadados.length + ' campos do Memória SPU, na ordem da coleção.' +
+      (d.estrutura.aoVivo ? '' : '<br><b>Atenção:</b> não consegui consultar os campos do Memória SPU ' +
+       'agora; usei a lista guardada em 20/11/2026. Vale conferir se a coleção não mudou.') +
+      (li.length ? '<br><br>O que ficou de fora:<ul><li>' + li.join('</li><li>') + '</li></ul>' : '') +
+      (semFonte.length ? '<br>Coluna em branco, porque a ferramenta não guarda esse dado: ' +
+        semFonte.map(esc).join(', ') + '.' : ''),
+      !d.estrutura.aoVivo);
+  });
 }
 
 iniciar();

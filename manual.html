@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Manual do Indexador</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Uma tela só. Faixa do Indexador com os capítulos, painel do passo à esquerda e, no palco,
+   a tela da ferramenta como ela é: fila, ou texto da norma + ficha. O palco mostra só o
+   bloco do passo, para caber sem rolagem. Cores, fontes e componentes são os do Indexador.
+
+   Os exemplos são reais: texto e cadastro da Portaria SPU/MGI nº 11.459/2025 e da Portaria
+   Conjunta MGI/CGU nº 96/2025, tirados da base; a lista de sugestões é o que a regra da
+   ferramenta devolve para esse texto com o vocabulário de 26/08/2026. As ESCOLHAS mostradas
+   (assunto, palavras aceitas, termo proposto) são ilustração, a validar por especialista. */
+:root{
+  --bg:#17332c; --bg-soft:#1e453b;
+  --ice:#f5f2ea; --card:#fffdf8; --line:#e4ddcd; --branco:#ffffff;
+  --ink:#211f1a; --ink-2:#3c382f; --muted:#7d7668;
+  --accent:#1e5c4f; --accent-dark:#143f36;
+  --terra:#b8541f;
+  --ok:#1e6b47; --ok-bg:#e5f1e8;
+  --warn:#8a6210; --warn-bg:#f7ecd2;
+  --bad:#a13a2a; --bad-bg:#f6e5e0;
+  --mark:#f8e9a8; --mark-ink:#6b5600;
+  --sombra:0 1px 2px rgba(33,31,26,.05), 0 8px 24px rgba(33,31,26,.07);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--ice);color:var(--ink);overflow:hidden;
+  font-family:"Inter",system-ui,sans-serif;font-size:14px;line-height:1.45;
+  background-image:radial-gradient(circle at 15% 0%, rgba(30,92,79,.045), transparent 40%)}
+.app{height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+button{font-family:inherit}
+
+/* ---------- topo: marca + capítulos ---------- */
+.topo{background:linear-gradient(150deg,var(--bg) 0%,var(--bg-soft) 80%);color:var(--branco);
+  border-bottom:3px solid var(--terra);display:flex;align-items:center;gap:18px;
+  padding-block:9px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px))}
+.marca{font-family:"Fraunces",serif;font-weight:600;font-size:16px;white-space:nowrap;flex:none}
+.marca span{opacity:.6;font-weight:500}
+.caps{display:flex;gap:3px;overflow-x:auto;scrollbar-width:none;min-width:0;margin-left:auto}
+.cap{flex:none;border:0;background:transparent;color:var(--branco);opacity:.62;cursor:pointer;
+  font-size:12px;font-weight:600;padding:5px 10px;border-radius:999px;white-space:nowrap;
+  transition:opacity .15s,background .15s}
+.cap:hover{opacity:1}
+.cap.feito{opacity:.85}
+.cap[aria-current="true"]{opacity:1;background:rgba(255,255,255,.16)}
+.cap:focus-visible{outline:2px solid var(--mark);outline-offset:1px}
+
+/* ---------- corpo ---------- */
+.meio{display:grid;grid-template-columns:minmax(0,290px) minmax(0,1fr);gap:16px;min-height:0;
+  padding-block:14px 10px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+.painel{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--accent);
+  border-radius:12px;box-shadow:var(--sombra);padding:18px 20px 14px;
+  display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto}
+.fase{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--terra);
+  font-weight:700}
+.painel h1{font-family:"Fraunces",serif;font-weight:600;font-size:22px;line-height:1.18;
+  margin:0;letter-spacing:-.01em;text-wrap:balance}
+.painel p{margin:0;font-size:15px;line-height:1.5;color:var(--ink-2)}
+.bolinhas{margin-top:auto;padding-top:14px;border-top:1px solid var(--line);
+  display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.bola{position:relative;width:9px;height:9px;padding:0;border-radius:50%;cursor:pointer;
+  border:1.5px solid var(--line);background:var(--card);
+  transition:background .15s,border-color .15s,width .15s}
+.bola.visto{border-color:var(--accent);background:rgba(30,92,79,.22)}
+.bola[aria-current="step"]{width:22px;border-radius:6px;background:var(--accent);
+  border-color:var(--accent)}
+.bola:hover{border-color:var(--terra)}
+.bola:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bola .nome{position:absolute;bottom:calc(100% + 8px);left:0;transform:translateY(4px);
+  background:var(--ink);color:var(--ice);font-size:11.5px;font-weight:600;line-height:1.2;
+  white-space:nowrap;padding:5px 9px;border-radius:7px;opacity:0;pointer-events:none;z-index:30;
+  transition:opacity .13s,transform .13s}
+.bola:hover .nome,.bola:focus-visible .nome{opacity:1;transform:none}
+
+/* ---------- palco: a tela da ferramenta ---------- */
+.palco{min-height:0;display:flex;flex-direction:column;gap:10px;font-size:12.5px}
+.rot-palco{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+  font-weight:700;flex:none}
+.cartao{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  box-shadow:var(--sombra);padding:14px 16px;min-height:0;overflow:auto;scrollbar-width:thin}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;min-height:0;flex:1}
+.barra-doc{display:flex;align-items:center;gap:10px;flex:none;flex-wrap:wrap}
+.barra-doc b{font-family:"Fraunces",serif;font-weight:600;font-size:14px}
+
+/* componentes copiados do Indexador */
+.b{padding:6px 12px;border:none;border-radius:8px;background:var(--accent);color:var(--branco);
+  font-weight:600;font-size:12px;cursor:default;white-space:nowrap}
+.b.sec{background:var(--branco);color:var(--accent-dark);border:1px solid var(--line)}
+.b.mini{padding:3px 9px;font-size:11px}
+h3.blo{font-family:"Fraunces",serif;font-weight:600;font-size:14px;margin:0 0 8px;
+  color:var(--accent-dark);border-bottom:1px solid var(--line);padding-bottom:5px}
+.campo{margin-bottom:10px}
+.campo>label{display:block;font-size:10.5px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+.ajuda{font-size:11px;color:var(--muted);margin-top:4px;font-style:italic}
+.vazio{color:var(--muted);font-style:italic}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;
+  background:var(--ok-bg);color:var(--accent-dark);font-size:12px;font-weight:600;margin:0 5px 5px 0}
+.chip.cheio{background:var(--bad-bg);color:var(--bad)}
+.badge{font-size:10px;padding:1px 6px;border-radius:10px;background:var(--warn-bg);
+  color:var(--warn);font-weight:600;white-space:nowrap}
+.badge.em{background:var(--ok-bg);color:var(--ok)}
+.cnt{color:var(--muted);font-size:11px}
+.caixa{border:1px solid var(--line);border-radius:10px;background:var(--branco);padding:5px}
+.termo{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:8px}
+.termo .cx{width:12px;height:12px;border:1.5px solid #b9b2a3;border-radius:3px;flex:none}
+.termo .cx.on{background:var(--accent);border-color:var(--accent)}
+.termo .nome{flex:1;min-width:0}
+.entrada{border:1px solid var(--line);border-radius:8px;background:var(--branco);padding:6px 9px;
+  color:var(--ink);min-height:30px}
+.entrada.ph{color:var(--muted)}
+.aviso{background:var(--warn-bg);color:var(--warn);border-radius:9px;padding:8px 11px;
+  font-size:12px;margin-bottom:10px}
+.aviso.ok{background:var(--ok-bg);color:var(--ok)}
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:600;
+  background:var(--mark);color:var(--mark-ink)}
+.pill.fim{background:var(--ok-bg);color:var(--ok)}
+.secao{border:1px solid var(--line);border-radius:12px;background:var(--branco);margin-bottom:9px;
+  padding:10px 14px;font-family:"Fraunces",serif;font-weight:600;font-size:14px;
+  color:var(--accent-dark);display:flex;align-items:center;gap:8px}
+.secao::before{content:"▸";font-size:11px;color:var(--muted)}
+.secao .marca-s{margin-left:auto;font-family:"Inter",sans-serif;font-size:10.5px;font-weight:600;
+  padding:2px 9px;border-radius:999px;background:var(--ok-bg);color:var(--ok)}
+.acoes{display:flex;gap:7px;justify-content:flex-end;margin-top:10px}
+.rel{border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:8px;
+  background:var(--branco)}
+.rel .cab{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.rel .tp{border:1px solid var(--line);border-radius:6px;padding:2px 7px;font-size:11.5px;
+  background:var(--branco)}
+.rel .botoes{margin-left:auto;display:flex;gap:5px}
+.rel .bt{border:1px solid var(--line);border-radius:6px;padding:2px 9px;font-size:11.5px;
+  font-weight:600;background:var(--branco);color:var(--muted)}
+.rel .bt.sim.on{background:var(--ok);border-color:var(--ok);color:var(--branco)}
+.rel .bt.nao.on{background:var(--bad);border-color:var(--bad);color:var(--branco)}
+.rel .ev{color:var(--muted);font-size:11.5px;font-style:italic;line-height:1.45;margin-top:5px}
+.rel.rej{opacity:.6}
+.no{padding:3px 6px;border-radius:6px;display:flex;gap:6px;align-items:baseline}
+.no .seta{width:10px;color:var(--muted);font-size:10px;flex:none}
+.no .cod{color:var(--muted);font-size:10.5px;font-variant-numeric:tabular-nums;min-width:62px}
+.no.sel{background:var(--accent);color:var(--branco)}
+.no.sel .cod,.no.sel .seta{color:rgba(255,255,255,.75)}
+.valor-atual{padding:2px 0 3px;font-size:13px}
+.riscado{color:var(--muted);text-decoration:line-through}
+table.fila{width:100%;border-collapse:collapse;font-size:inherit}
+table.fila th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--muted);padding:5px 8px;border-bottom:1px solid var(--line)}
+table.fila td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.sel-falso{border:1px solid var(--line);border-radius:8px;background:var(--branco);
+  padding:5px 9px;font-size:11.5px;white-space:nowrap}
+.sel-falso::after{content:" ▾";color:var(--muted)}
+.barra-f{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+
+/* o texto da norma */
+.tx{white-space:pre-wrap;line-height:1.6;font-size:12px;color:var(--ink-2)}
+.tx [data-m]{border-radius:3px;transition:background .25s}
+.tx[data-luz~="ementa"] [data-m="ementa"],
+.tx[data-luz~="art1"] [data-m="art1"],
+.tx[data-luz~="imovel"] [data-m="imovel"],
+.tx[data-luz~="laudo"] [data-m="laudo"],
+.tx[data-luz~="perm"] [data-m="perm"],
+.tx[data-luz~="revoga"] [data-m="revoga"],
+.tx[data-luz~="const"] [data-m="const"]{background:var(--mark);color:var(--ink)}
+
+/* o que o manual acrescenta por cima da tela */
+.foco{outline:2px solid var(--terra);outline-offset:3px;border-radius:8px}
+.nota-manual{border:1px dashed var(--terra);border-radius:10px;padding:9px 11px;margin-top:10px;
+  background:rgba(184,84,31,.045)}
+.nota-manual>small{display:block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--terra);font-weight:700;margin-bottom:5px}
+
+/* cena: a busca */
+.busca-mock{display:flex;gap:8px;margin-bottom:12px}
+.busca-mock .entrada{flex:1}
+.res{display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid var(--line);
+  transition:opacity .3s}
+.res .linhas{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.res .l{height:7px;border-radius:4px;background:var(--line)}
+.res .l.c{width:58%}
+.res.sai{opacity:.16}
+.tag{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.tag.trata{background:var(--ok-bg);color:var(--ok)}
+.tag.cita{background:var(--line);color:var(--muted)}
+
+/* cena: o caminho do trabalho */
+.fluxo{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap}
+.etapa{flex:1 1 130px;border:1px solid var(--line);border-radius:12px;background:var(--branco);
+  padding:12px;display:flex;flex-direction:column;gap:4px}
+.etapa b{font-family:"Fraunces",serif;font-size:14px;color:var(--accent-dark)}
+.etapa span{font-size:11.5px;color:var(--muted)}
+.etapa.sua{border-color:var(--accent);background:var(--ok-bg)}
+.vai{align-self:center;color:var(--terra);font-size:16px;flex:none}
+
+/* ---------- rodapé ---------- */
+.rodape{position:relative;display:flex;align-items:center;justify-content:center;gap:14px;
+  padding-block:9px;padding-bottom:calc(9px + env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  border-top:1px solid var(--line)}
+.seta-nav{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);
+  background:var(--card);color:var(--accent);font-size:17px;line-height:1;cursor:pointer;
+  display:grid;place-items:center;box-shadow:var(--sombra);transition:border-color .15s,background .15s}
+.seta-nav:hover:not(:disabled){border-color:var(--accent);background:var(--ok-bg)}
+.seta-nav:disabled{opacity:.3;cursor:default}
+.seta-nav:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.conta{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:96px;
+  text-align:center}
+.credito{position:absolute;right:16px;bottom:calc(9px + env(safe-area-inset-bottom,0px));
+  font-size:10px;color:var(--muted);text-align:right;line-height:1.35}
+
+/* Janela estreita (o painel de artefatos, por exemplo): o passo sobe para uma faixa
+   compacta e a tela da ferramenta continua inteira embaixo, com texto e ficha lado a lado.
+   Antes disto o texto da norma empilhava sobre a ficha e a empurrava para fora da tela. */
+@media (max-width:900px){
+  .meio{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:10px;
+    padding-block:10px 8px}
+  .painel{padding:11px 14px 10px;gap:5px;border-top-width:3px;overflow:visible}
+  .painel h1{font-size:18px}
+  .painel p{font-size:13.5px;line-height:1.4}
+  .bolinhas{margin-top:4px;padding-top:0;border-top:0}
+  .credito{display:none}
+  .marca span{display:none}
+  .so-largo{display:none}
+}
+@media (max-width:620px){
+  .split{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,36%) minmax(0,1fr);gap:8px}
+  .palco{font-size:12px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="app">
+  <header class="topo">
+    <span class="marca">Indexador <span>· manual</span></span>
+    <nav class="caps" id="caps" aria-label="Capítulos"></nav>
+  </header>
+
+  <main class="meio">
+    <aside class="painel">
+      <span class="fase" id="fase"></span>
+      <h1 id="t"></h1>
+      <p id="p"></p>
+      <div class="bolinhas" id="bolinhas"></div>
+    </aside>
+    <section class="palco" id="palco"></section>
+  </main>
+
+  <footer class="rodape">
+    <button class="seta-nav" id="voltar" aria-label="Passo anterior">‹</button>
+    <span class="conta" id="conta"></span>
+    <button class="seta-nav" id="avancar" aria-label="Próximo passo">›</button>
+    <span class="credito">Escritório de Processos · EPP/CGGES/DEGOV/SPU/MGI<br>V1 · 11/2026</span>
+  </footer>
+</div>
+
+<script>
+/* ============ os dois textos reais ============ */
+const TXT = {
+n11459: `PORTARIA SPU/MGI Nº 11.459, DE 26 DE DEZEMBRO DE 2025
+<span data-m="ementa">Estabelece a base de cálculo do valor dos imóveis funcionais de propriedade da União e sua utilização para fins de cobrança da taxa de uso e os procedimentos para o cadastramento dos valores dos imóveis nos sistemas de gestão patrimonial no âmbito da Secretaria do Patrimônio da União.</span>
+
+A SECRETÁRIA DO PATRIMÔNIO DA UNIÃO DO MINISTÉRIO DA GESTÃO E DA INOVAÇÃO EM SERVIÇOS PÚBLICOS, no uso das atribuições que lhe conferem o art. 44, caput, inciso I, do Decreto nº 12.102, de 8 de julho de 2024, e tendo em vista o disposto no art. 16 da Lei nº 8.025, de 12 de abril de 1990 e art. 4º do Decreto nº 6.054, de 1º de março de 2007, resolve:
+<span data-m="art1">Art. 1º A ocupação dos imóveis funcionais de uso residencial administrados pela União implica o pagamento de contrapartida onerosa mensal, denominada taxa de uso, pelo servidor público <span data-m="perm">permissionário</span>.</span>
+§1º A contrapartida de que trata o caput será obtida:
+I - pela taxa de 0,001 (um milésimo) do valor do <span data-m="imovel">imóvel</span>; ou
+II - por opção do servidor, pela taxa de 10% (dez por cento) incidente sobre o valor integral da remuneração do cargo ou função em comissão.
+Art. 2º Para fins de cobrança das taxas de uso dos imóveis funcionais de propriedade da União, será adotada a base de cálculo para cobrança do Imposto Predial e Territorial Urbano - IPTU do Governo do Distrito Federal.
+§1º Compete à Superintendência do Patrimônio da União no Distrito Federal o levantamento das informações até o dia 1º de março de cada ano.
+§2º A relação dos valores levantados serão compartilhados com a Diretoria de Caracterização e Incorporação de Imóveis para validação conjunta dos valores dos imóveis obtidos junto ao Governo do Distrito Federal.
+§3º Na ausência de informação de valor do <span data-m="imovel">imóvel</span> pelo Governo do Distrito Federal, fica possibilitada à Superintendência Patrimônio da União no Distrito Federal adotar o Índice Nacional de Preços ao Consumidor Amplo (IPCA) acumulado no período, divulgado pela Fundação Instituto Brasileiro de Geografia e Estatística (IBGE), ou índice que vier a substituí-lo.
+§4º Compete à Superintendência do Patrimônio da União no Distrito Federal a gestão das informações cadastradas, no que couber, junto aos sistemas administrados pela Secretaria do Patrimônio da União, nos termos dos parágrafos 2º e 3º.
+Art. 3º Para fins de cadastramento dos valores dos imóveis nos sistemas de gestão patrimonial no âmbito da Secretaria do Patrimônio da União, independentemente da cobrança das taxas de uso, o valor dos imóveis deverá ser mantido atualizado, observados os seguintes procedimentos:
+I - o valor do <span data-m="imovel">imóvel</span> corresponderá ao valor justo, determinado a partir de <span data-m="laudo">Laudo de Avaliação</span> ou Relatório de Valor de Referência; e
+II - para fins exclusivamente contábeis, os valores terão validade de dez anos a partir da data de avaliação, na forma prevista da Instrução Normativa vigente.
+Art. 4º Esta Portaria entra em vigor na data de sua publicação.
+CAROLINA GABAS STUCHI`,
+
+n96: `PORTARIA CONJUNTA MGI/CGU Nº 96, DE 12 DE DEZEMBRO DE 2025
+<span data-m="revoga">Revoga a Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021</span>, que instituía regime especial de governança para a destinação de imóveis da União.
+
+A MINISTRA DE ESTADO DA GESTÃO E DA INOVAÇÃO EM SERVIÇOS PÚBLICOS e o MINISTRO DE ESTADO DA CONTROLADORIA-GERAL DA UNIÃO, no uso das atribuições que lhes conferem o <span data-m="const">art. 87, parágrafo único, incisos I e II da Constituição</span>, e tendo em vista o art. 32, inciso VII, e o art. 49, inciso I, da Lei nº 14.600, de 19 de junho de 2023, e o processo nº 19739.066378/2025-36, resolvem:
+Art. 1º <span data-m="revoga">Fica revogada a Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021.</span>
+Art. 2º O Ministério da Gestão e da Inovação em Serviços Públicos instituirá novas regras para a governança da destinação de imóveis da União.
+Art. 3º Esta Portaria entra em vigor na data de sua publicação.
+ESTHER DWECK
+Ministra de Estado da Gestão e da Inovação em Serviços Públicos
+VINÍCIUS MARQUES DE CARVALHO
+Ministro de Estado da Controladoria-Geral da União`
+};
+const TIT = {
+  n11459:'Portaria SPU/MGI nº 11.459, de 26 de dezembro de 2025',
+  n96:'Portaria Conjunta MGI/CGU nº 96, de 12 de dezembro de 2025'
+};
+
+/* ============ cenas ============ */
+const f = (cond, cls) => cond ? ' ' + cls : '';
+
+function telaNorma(o){
+  return `<div class="barra-doc"><span class="b sec">← voltar para a fila</span>
+      <b>${TIT[o.norma || 'n11459']}</b>
+      <span class="so-largo" style="margin-left:auto;display:flex;gap:7px;align-items:center"><span class="pill">a indexar</span><span class="b sec">devolver à fila</span></span></div>
+    <div class="split">
+      <div class="cartao${f(o.focoTexto,'foco')}"><div class="tx" data-luz="${o.luz || ''}">${TXT[o.norma || 'n11459']}</div></div>
+      <div class="cartao${f(o.focoFicha,'foco')}">${o.ficha}</div>
+    </div>`;
+}
+
+/* Normas reais. No retrato de 26/08/2026, 35 normas ativas trazem a expressão «inscrição de
+   ocupação» no texto. As cinco abaixo estão entre elas; a marca vem da ementa de cada uma. */
+const BUSCA = [
+  ['cita',  'Portaria nº 335, de 02 de outubro de 2020', 'Aprova o Regimento Interno da Secretaria de Coordenação e Governança do Patrimônio da União'],
+  ['trata', 'Resolução CDE nº 4, de 19 de março de 2026', 'Aprova diretrizes de destinação de imóveis para inscrição de ocupação'],
+  ['cita',  'Resolução COMGC/SPU/MGI nº 5, de 24 de outubro de 2025', 'Institui a Tabela Taxonômica de regimes de destinação imobiliária'],
+  ['cita',  'Resolução CDE nº 6, de 19 de março de 2026', 'Aprova diretrizes para a lavratura e registro dos termos de incorporação de imóveis da União'],
+  ['cita',  'Portaria SEDDM nº 9.239, de 20 de outubro de 2022', 'Regulamenta o regime especial de governança de destinação de imóveis da União']
+];
+function cenaBusca(depois){
+  return `<div class="rot-palco">Memória SPU · busca na coleção</div>
+    <div class="cartao" style="flex:1">
+      <div class="busca-mock"><div class="entrada">inscrição de ocupação</div><span class="b">buscar</span></div>
+      <div class="cnt" style="margin-bottom:4px">${depois ? 'buscando pelo que a norma trata'
+        : '35 normas trazem a expressão no texto — cinco delas:'}</div>
+      ${BUSCA.map(l => `<div class="res${f(depois && l[0]==='cita','sai')}">
+        <div class="linhas"><b>${l[1]}</b><span class="cnt">${l[2]}</span></div>
+        <span class="tag ${l[0]}">${l[0]==='trata' ? 'trata do tema' : 'só menciona'}</span></div>`).join('')}
+    </div>`;
+}
+
+function cenaFila(modo){
+  const cab = `<table class="fila"><thead><tr><th>Norma</th><th>Tipo</th><th>Ano</th><th>Situação</th><th>Quem revisou</th><th></th></tr></thead><tbody>`;
+  const linha = (t, tipo, ano, st, quem, foco) => `<tr><td>${t}</td><td>${tipo}</td><td>${ano}</td>
+    <td><span class="pill${f(st==='indexada','fim')}">${st}</span></td><td class="cnt">${quem}</td>
+    <td><span class="b sec mini${f(foco,'foco')}">abrir</span></td></tr>`;
+  const aIndexar = [
+    ['Portaria SPU/MGI nº 546, de 07 de março de 2023','2023'],
+    ['Portaria SEDDM/ME nº 7.368, de 17 de agosto de 2022','2022'],
+    ['Portaria SPU/ME nº 657, de 25 de janeiro de 2022','2022'],
+    ['Portaria SPU/ME nº 3.723, de 27 de abril de 2022','2022'],
+    ['Portaria SPU/ME nº 3.852, de 06 de abril de 2021','2021']
+  ];
+  let corpo = '';
+  if (modo === 'fila') corpo = cab + aIndexar.map((l, k) =>
+      linha(l[0], 'Portaria', l[1], 'a indexar', '—', k === 0)).join('') + '</tbody></table>';
+  if (modo === 'busca') corpo = cab + linha(aIndexar[4][0], 'Portaria', '2021', 'a indexar', '—', false) + '</tbody></table>';
+  if (modo === 'indexadas') corpo = cab
+      + linha(TIT.n11459, 'Portaria', '2025', 'indexada', 'Fulano', true)
+      + linha(TIT.n96, 'Portaria Conjunta', '2025', 'indexada', 'Beltrano', false) + `</tbody></table>
+      <div class="nota-manual"><small>no alto da ficha, depois de abrir</small>
+        <span class="pill">já indexada — você está corrigindo</span>
+        <span class="pill fim">indexou: Fulano</span></div>`;
+  if (modo === 'exportar') corpo = `<div class="nota-manual" style="margin-top:4px"><small>o caminho do arquivo</small>
+      <div class="fluxo">
+        <div class="etapa sua"><b>Indexador</b><span>planilha Excel completa e CSV para o Tainacan</span></div>
+        <span class="vai">→</span>
+        <div class="etapa"><b>Repositório</b><span>carrega o arquivo e decide sobre as correções de cadastro propostas</span></div>
+        <span class="vai">→</span>
+        <div class="etapa"><b>Memória SPU</b><span>a busca passa a usar o que foi registrado</span></div>
+      </div></div>`;
+  const exporta = `<span class="b sec">Exportar Excel</span><span class="b sec">Exportar CSV</span>`;
+  return `<div class="rot-palco">Indexador · fila de revisão</div>
+    <div class="cartao" style="flex:1">
+      <h3 class="blo">Fila de revisão</h3>
+      <div class="barra-f">
+        <span class="sel-falso${f(modo==='indexadas','foco')}">${modo === 'indexadas' ? 'Indexadas — trabalho concluído' : 'A indexar — ninguém pegou ainda'}</span>
+        <span class="entrada${f(modo!=='busca','ph')}${f(modo==='busca','foco')}" style="flex:1;min-width:150px">${modo === 'busca' ? '3.852' : 'buscar no título, número ou texto da norma'}</span>
+        <span class="sel-falso">Todos os tipos</span>
+        <span class="b sec">Painel</span>
+        ${modo === 'exportar' ? `<span class="foco" style="display:inline-flex;gap:7px">${exporta}</span>` : exporta}
+      </div>
+      ${corpo}
+    </div>`;
+}
+
+const triagemOk = `<div class="aviso ok">Classificada como norma patrimonial. <span class="b sec mini" style="margin-left:6px">rever</span></div>`;
+const rodapeAcoes = foco => `<div class="acoes${f(foco,'foco')}"><span class="b sec">cancelar</span>
+  <span class="b sec">salvar rascunho</span><span class="b">concluir revisão</span></div>`;
+
+function fTriagem(recusa){
+  return `<h3 class="blo">Esta norma é patrimonial?</h3>
+    <div class="ajuda" style="font-style:normal;margin:0 0 10px">Norma patrimonial é a que trata do <b>patrimônio da União</b> — caracterização, ingresso, avaliação, destinação, uso, receitas, controle. Não são patrimoniais as de recursos humanos, diárias e passagens, orçamento, tecnologia da informação e afins, ainda que editadas pela SPU.</div>
+    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px" class="${recusa ? '' : 'foco'}">
+      <span class="b${f(recusa,'sec')}">Sim, é patrimonial — seguir para a ficha</span>
+      <span class="b${f(!recusa,'sec')}">Não é patrimonial</span></div>
+    ${recusa ? `<div class="campo foco"><label>Motivo da recusa — obrigatório</label>
+      <div class="entrada ph">obrigatório — ex.: trata de diárias e passagens</div></div>
+      <div class="aviso">Ao salvar, a norma fica indexada como <b>recusada por não ser patrimonial</b>. Assunto e palavras-chave não são preenchidos.</div>` : ''}`;
+}
+
+function fSecoes(){
+  return `${triagemOk}
+    <div class="foco" style="padding:2px">
+      <div class="secao">Revisão cadastral</div>
+      <div class="secao">Indexação</div>
+      <div class="secao">Compilação do texto <span class="marca-s">sem resposta</span></div>
+    </div>${rodapeAcoes()}`;
+}
+
+function fCadastro(){
+  const campo = (r, v) => `<div class="campo" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center">
+    <label style="grid-column:1/-1">${r}</label><div class="valor-atual">${v}</div><span class="b sec mini">propor correção</span></div>`;
+  return `<h3 class="blo">Revisão cadastral</h3>
+    ${campo('Título', TIT.n11459)}
+    ${campo('Data de assinatura', '26/12/2025')}
+    ${campo('Data de publicação', '31/12/2025')}
+    <div class="nota-manual"><small>como fica uma proposta — caso real, de outra norma</small>
+      <div class="campo" style="margin:0"><label>Título</label>
+        <div class="valor-atual riscado">Dereto-Lei n° 178, de 16 de fevereiro de 1967</div>
+        <div class="entrada">Decreto-Lei nº 178, de 16 de fevereiro de 1967</div></div></div>`;
+}
+
+function fAssunto(aberta){
+  const no = (cod, nome, nivel, o={}) => `<div class="no${f(o.sel,'sel')}" style="padding-left:${6+(nivel-1)*14}px">
+    <span class="seta">${o.seta || ''}</span><span class="cod">${cod}</span><span>${nome}</span></div>`;
+  return `<h3 class="blo">Assunto</h3>
+    <div class="campo"><label>Selecionados — máximo 3</label>
+      <div>${aberta ? '<span class="chip">Arrecadação de receitas patrimoniais imobiliárias ×</span>'
+        : '<span class="vazio">nenhum — registre apenas o nível mais profundo</span>'}</div></div>
+    <div class="caixa${f(true,'foco')}">
+      ${no('03.01','Caracterização patrimonial imobiliária',1,{seta:'▸'})}
+      ${no('03.02','Gestão do ingresso patrimonial imobiliário',1,{seta:'▸'})}
+      ${no('03.03','Avaliação e contabilidade patrimonial imobiliária',1,{seta:'▸'})}
+      ${no('03.04','Destinação e gestão do uso imobiliário',1,{seta:'▸'})}
+      ${no('03.05','Gestão de receitas patrimoniais imobiliárias',1,{seta: aberta ? '▾' : '▸'})}
+      ${aberta ? no('03.05.01','Arrecadação de receitas patrimoniais imobiliárias',2,{sel:true})
+               + no('03.05.02','Gestão de cobrança de débitos inadimplidos',2) : ''}
+      ${no('03.06','Controle patrimonial imobiliário',1,{seta:'▸'})}
+      ${no('03.07','Governança de dados, informação e conhecimento patrimonial imobiliário',1,{seta:'▸'})}
+    </div>`;
+}
+
+function fRegime(){
+  return `<h3 class="blo">Assunto</h3>
+    <div class="campo"><label>Selecionados — máximo 3</label>
+      <div><span class="chip">Arrecadação de receitas patrimoniais imobiliárias ×</span></div></div>
+    <h3 class="blo" style="margin-top:14px">Regime</h3>
+    <div class="nota-manual foco" style="margin-top:0"><small>aqui a ficha fica vazia</small>
+      O campo só aparece com assunto em <b>03.04.02 Execução da destinação imobiliária</b>
+      (regime de destinação) ou em <b>03.02 Gestão do ingresso patrimonial</b> (regime de aquisição).</div>`;
+}
+
+/* A lista é o que `sugerirPalavras()` devolve para este texto com o vocabulário de 26/08/2026. */
+const SUG = [
+  ['Imóvel', true, 3], ['Laudo de avaliação', false, 1],
+  ['Valor de referência', false, 1], ['Valor justo', false, 1]
+];
+function fPalavras(o){
+  o = o || {};
+  const sel = o.sel || [];
+  const linha = (s, k) => `<div class="termo${f(o.focoLinha === k,'foco')}">
+      <span class="cx"></span><span class="nome">${s[0]}</span><span title="próxima ocorrência no texto">⌖</span>
+      <span class="badge${f(s[1],'em')}">${s[1] ? 'ementa/Art. 1º' : 'só no corpo'}</span><span class="cnt">×${s[2]}</span></div>`;
+  let busca = '';
+  if (o.busca === 'permiss') busca = `<div class="caixa" style="margin-top:5px">
+      <div class="termo"><span class="cx on"></span><span class="nome">Permissão de uso para fins residenciais</span><span class="cnt">Destinação e Gestão do Uso Imobiliário</span></div>
+      <div class="termo"><span class="cx"></span><span class="nome">Permissão de uso para eventos</span><span class="cnt">Destinação e Gestão do Uso Imobiliário</span></div></div>`;
+  if (o.busca === 'taxa de uso') busca = `<div class="caixa" style="margin-top:5px;padding:8px">
+      <span class="vazio">Nenhum termo do vocabulário casa com “taxa de uso de imóvel funcional”.</span>
+      <span class="b sec mini foco" style="margin-left:6px">propor como termo novo</span></div>`;
+  return `<h3 class="blo">Palavras-chave</h3>
+    <div class="campo${f(o.focoSel,'foco')}"><label>Selecionadas — máximo 6</label>
+      <div>${sel.length ? sel.map(t => `<span class="chip">${t} ×</span>`).join('') : '<span class="vazio">nenhuma</span>'}</div></div>
+    ${o.semSug ? '' : `<div class="campo${f(o.focoSug,'foco')}"><label>Sugeridas — as mais prováveis primeiro</label>
+      <div class="caixa">${SUG.map(linha).join('')}</div></div>`}
+    ${o.busca === undefined ? '' : `<div class="campo${f(o.focoBusca,'foco')}"><label>Buscar no vocabulário inteiro</label>
+      <div class="entrada${f(!o.busca,'ph')}">${o.busca === 'taxa de uso' ? 'taxa de uso de imóvel funcional' : (o.busca || 'digite parte do termo')}</div>
+      ${busca}
+      ${o.proposto ? `<div class="ajuda" style="font-style:normal">Propostos como novos: <span class="chip cheio">Taxa de uso de imóvel funcional ×</span></div>` : ''}</div>`}`;
+}
+
+function fSituacao(){
+  return `<h3 class="blo">Situação e vigência</h3>
+    <div class="campo foco"><label>Situação da norma</label><span class="sel-falso">Vigente sem alteração</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="campo"><label>Início de vigência</label><div class="entrada">31/12/2025</div></div>
+      <div class="campo"><label>Revogado em</label><div class="entrada ph">dd/mm/aaaa</div></div></div>
+    <div class="nota-manual"><small>o aviso, num caso real — Portaria Interministerial ME/CGU nº 6.909/2021</small>
+      <div class="aviso" style="margin:0"><b>A situação declarada contradiz o que o grafo encontrou.</b>
+        Consta <b>Vigente sem alteração</b>, e há revogação total apontando para ela. Confira antes de seguir.
+        <div style="margin-top:5px"><b>Portaria Conjunta MGI/CGU nº 96, de 12 de dezembro de 2025</b> revoga esta norma</div></div></div>`;
+}
+
+function fRel(o){
+  o = o || {};
+  const cartao = (tipo, frase, ev, dec, foco, disp) => `<div class="rel${f(dec==='nao','rej')}${f(foco,'foco')}">
+    <div class="cab"><span class="tp">${tipo} ▾</span>
+      <span class="botoes"><span class="bt sim${f(dec==='sim','on')}">confirma</span><span class="bt nao${f(dec==='nao','on')}">não</span></span></div>
+    <div>Esta norma <b>${frase}</b> <b>Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021</b>${disp ? ` <span class="cnt">(${disp})</span>` : ''}</div>
+    <div class="ev">“${ev}”</div></div>`;
+  return `<h3 class="blo">Relações entre normas</h3>
+    <div class="ajuda" style="margin:0 0 8px">Detectadas na ementa e no Art. 1º. Confirme uma a uma — o trecho que originou cada detecção está à vista.</div>
+    ${cartao('revoga (integral)','revoga','PORTARIA CONJUNTA MGI/CGU Nº 96, DE 12 DE DEZEMBRO DE 2025 Revoga a Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021', o.a, o.foco==='a')}
+    ${cartao('revoga em parte','revoga em parte','96, DE 12 DE DEZEMBRO DE 2025 Revoga a Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021, que instituía regime especial de governança para a destinação de imóveis da União. A MINISTRA DE ESTADO DA GESTÃO E DA INOVAÇÃO EM SERVIÇOS PÚBLICOS e o MINISTRO DE ES', o.b, o.foco==='b', 'art.32, art.49, art.87, incisoi, incisovii, parágrafoúnico')}
+    ${o.manual ? `<div class="caixa foco" style="padding:9px 11px"><b style="font-size:12px">Relacionar à mão — quando a detecção não achou</b>
+      <div style="display:flex;gap:6px;margin:7px 0;flex-wrap:wrap"><span class="sel-falso">esta norma…</span><span class="sel-falso">não está sendo fácil</span></div>
+      <div class="entrada ph">digite parte do título ou o número da outra norma</div></div>` : ''}`;
+}
+
+function fFechar(duvida){
+  return `<div class="campo"><label>Observações</label><div class="entrada ph" style="min-height:38px"> </div></div>
+    <div class="campo foco"><div style="display:flex;gap:7px;align-items:center;font-weight:600">
+      <span class="termo" style="padding:0"><span class="cx on"></span></span> Tenho dúvida neste item</div>
+      <div class="entrada" style="margin-top:6px">A taxa de uso é receita patrimonial ou contrapartida de permissão? Define o assunto.</div>
+      <div class="ajuda">Vai para a planilha, na coluna “Dúvida — qual”.</div></div>`;
+}
+
+function fCompilacao(){
+  return `${triagemOk}<div class="secao">Revisão cadastral</div><div class="secao">Indexação</div>
+    <div class="caixa foco" style="padding:11px 13px">
+      <div style="font-family:Fraunces,serif;font-weight:600;font-size:14px;color:var(--accent-dark);margin-bottom:8px">▾ Compilação do texto</div>
+      <div class="campo"><label>Esta norma precisa ser compilada?</label>
+        <div style="display:flex;gap:6px"><span class="b">sim</span><span class="b sec">não</span></div></div>
+      <span class="b sec">abrir o DOCX no SharePoint ↗</span>
+      <div class="campo" style="margin:9px 0 0"><label>A norma já foi compilada?</label>
+        <div style="display:flex;gap:6px"><span class="b sec">sim</span><span class="b">ainda não</span></div>
+        <div class="ajuda">Enquanto a compilação estiver pendente dá para <b>salvar rascunho</b> à vontade — o que não dá é concluir a revisão.</div></div>
+    </div>`;
+}
+
+function fConcluir(){
+  return `${triagemOk}<div class="secao">Revisão cadastral</div>
+    <div class="secao">Indexação</div><div class="secao">Compilação do texto</div>${rodapeAcoes(true)}`;
+}
+
+/* ============ capítulos e passos ============ */
+const CAPS = [
+ { nome:'Por quê', passos:[
+   { c:'A busca', t:'A busca não acha',
+     p:'Quem procura «inscrição de ocupação» recebe dezenas de normas. Poucas tratam disso; a maioria só menciona a expressão.',
+     cena:() => cenaBusca(false) },
+   { c:'Para que serve', t:'É para isso que serve indexar',
+     p:'Ao indexar, você registra o assunto de que a norma trata. Com isso, a busca passa a trazer as normas sobre o tema, e não todas as que apenas o citam.',
+     cena:() => cenaBusca(true) } ]},
+ { nome:'A fila', passos:[
+   { c:'A fila', t:'Tudo começa na fila',
+     p:'Ela mostra as normas que esperam indexação. Abriu uma, ela fica reservada para você e sai da lista dos colegas.',
+     cena:() => cenaFila('fila') },
+   { c:'A busca', t:'Procurando uma norma específica?',
+     p:'A busca procura no título, no número e no texto. Serve para achar uma norma ou consultar outra enquanto você indexa.',
+     cena:() => cenaFila('busca') } ]},
+ { nome:'A tela', passos:[
+   { c:'Texto e ficha', t:'Norma de um lado, ficha do outro',
+     p:'À esquerda, o texto. À direita, as suas decisões. O que a ficha aponta, o texto mostra onde está.',
+     cena:() => telaNorma({ focoTexto:true, focoFicha:true, ficha:fTriagem(false).replace(/ class="foco"/,'') }) } ]},
+ { nome:'Triagem', passos:[
+   { c:'É patrimonial?', t:'Primeiro: é patrimonial?',
+     p:'É a norma que trata do patrimônio da União. Recursos humanos, diárias e orçamento não são, ainda que a norma seja editada pela SPU.',
+     cena:() => telaNorma({ luz:'ementa', ficha:fTriagem(false) }) },
+   { c:'O motivo da recusa', t:'Recusou? Diga por quê',
+     p:'O motivo é obrigatório. A norma recusada não some: segue na planilha, para outra pessoa conferir.',
+     cena:() => telaNorma({ ficha:fTriagem(true) }) },
+   { c:'As três seções', t:'Três seções, na ordem que quiser',
+     p:'Revisão cadastral, Indexação e Compilação. Abrem fechadas para você ver três decisões, e não trinta campos.',
+     cena:() => telaNorma({ ficha:fSecoes() }) } ]},
+ { nome:'Cadastro', passos:[
+   { c:'Propor correção', t:'Achou erro? Proponha',
+     p:'Você não edita o registro: propõe. O valor original fica riscado, à vista, e quem decide é a equipe do repositório.',
+     cena:() => telaNorma({ ficha:fCadastro() }) } ]},
+ { nome:'Assunto', passos:[
+   { c:'O que é o assunto', t:'O assunto delimita',
+     p:'É a função da gestão patrimonial em que a norma se encaixa. Vocabulário fechado, escolhido numa árvore.',
+     cena:() => telaNorma({ luz:'ementa', ficha:fAssunto(false) }) },
+   { c:'Um costuma bastar', t:'Um costuma bastar',
+     p:'Abra o ramo e clique no nível que corresponde ao que a norma trata. O limite é três; o normal é um.',
+     cena:() => telaNorma({ luz:'ementa', ficha:fAssunto(true) }) },
+   { c:'Regime', t:'O regime só aparece quando cabe',
+     p:'Se o assunto for de destinação ou de aquisição, a ficha pede também o regime. Neste exemplo, não pede.',
+     cena:() => telaNorma({ ficha:fRegime() }) } ]},
+ { nome:'Palavra-chave', passos:[
+   { c:'Comece pela ementa', t:'Comece pela ementa',
+     p:'Antes de olhar as sugestões, leia a ementa e o Art. 1º. No exemplo, a norma trata da taxa de uso de imóvel funcional.',
+     cena:() => telaNorma({ luz:'ementa art1', focoTexto:true, ficha:fPalavras({ semSug:true }) }) },
+   { c:'As sugestões', t:'A ferramenta propõe, você decide',
+     p:'Ela procura no texto os termos do vocabulário e mostra primeiro os que estão na ementa ou no Art. 1º.',
+     cena:() => telaNorma({ ficha:fPalavras({ focoSug:true }) }) },
+   { c:'Evidência forte não basta', t:'Evidência forte não basta',
+     p:'«Imóvel» é a primeira da lista, com a melhor marca. E não distingue a norma do exemplo de nenhuma outra.',
+     cena:() => telaNorma({ luz:'imovel', ficha:fPalavras({ focoLinha:0 }) }) },
+   { c:'Menção não é assunto', t:'Menção não é assunto',
+     p:'«Laudo de avaliação» aparece uma vez, no Art. 3º. Clique no termo para ver onde: a norma cita o laudo, não trata dele.',
+     cena:() => telaNorma({ luz:'laudo', rolar:'laudo', ficha:fPalavras({ focoLinha:1 }) }) },
+   { c:'Buscar no vocabulário', t:'O termo certo pode não estar escrito',
+     p:'O texto diz «permissionário», não «permissão de uso». Por isso existe a busca no vocabulário inteiro.',
+     cena:() => telaNorma({ luz:'perm', ficha:fPalavras({ semSug:true, busca:'permiss', focoBusca:true,
+       sel:['Permissão de uso para fins residenciais'] }) }) },
+   { c:'Propor termo novo', t:'Não existe? Proponha',
+     p:'O termo novo entra como proposta e passa a ser sugerido aos colegas, com a marca «da equipe».',
+     cena:() => telaNorma({ ficha:fPalavras({ semSug:true, busca:'taxa de uso', proposto:true,
+       sel:['Permissão de uso para fins residenciais','Taxa de uso de imóvel funcional'] }) }) },
+   { c:'Seis é o teto', t:'Seis é o teto, não a meta',
+     p:'Duas certeiras valem mais que seis com uma genérica. Teste final: quem busca por estas palavras procura esta norma?',
+     cena:() => telaNorma({ ficha:fPalavras({ focoSel:true,
+       sel:['Permissão de uso para fins residenciais','Taxa de uso de imóvel funcional'] }) }) } ]},
+ { nome:'Relações', passos:[
+   { c:'A situação', t:'Está valendo?',
+     p:'Você informa a situação. Se o acervo tiver uma revogação que contradiz a resposta, a ficha avisa e mostra de onde veio.',
+     cena:() => telaNorma({ ficha:fSituacao() }) },
+   { c:'Confirmar pelo trecho', t:'Relação se confirma lendo o trecho',
+     p:'Cada relação detectada vem com a frase que a originou. Confira no texto e confirme uma a uma.',
+     cena:() => telaNorma({ norma:'n96', luz:'revoga', ficha:fRel({ a:'sim', foco:'a' }) }) },
+   { c:'A detecção erra', t:'A detecção também erra',
+     p:'Aqui ela leu um artigo da Constituição, citado no preâmbulo, como revogação em parte. Diga não, ou corrija o tipo.',
+     cena:() => telaNorma({ norma:'n96', luz:'const', ficha:fRel({ a:'sim', b:'nao', foco:'b' }) }) },
+   { c:'Relacionar à mão', t:'Não detectou? Relacione à mão',
+     p:'Escolha o tipo e busque a outra norma. Para conflito ou dúvida de validade, o tipo é «não está sendo fácil».',
+     cena:() => telaNorma({ norma:'n96', ficha:fRel({ a:'sim', b:'nao', manual:true }) }) } ]},
+ { nome:'Fechar', passos:[
+   { c:'A dúvida', t:'Ficou com dúvida? Registre',
+     p:'Marque a dúvida e descreva o que falta resolver. Sem o texto, ela chega à planilha como um «sim» que ninguém sabe atender.',
+     cena:() => telaNorma({ ficha:fFechar() }) },
+   { c:'Compilação', t:'Precisa compilar?',
+     p:'Se sim, a ficha dá o link do arquivo. Com a compilação pendente dá para salvar rascunho, não para concluir.',
+     cena:() => telaNorma({ ficha:fCompilacao() }) },
+   { c:'Rascunho ou concluir', t:'Rascunho guarda, concluir entrega',
+     p:'O rascunho mantém a norma reservada para você. Concluir tira a norma da fila e registra o seu nome.',
+     cena:() => telaNorma({ ficha:fConcluir() }) } ]},
+ { nome:'Depois', passos:[
+   { c:'Reabrir', t:'Errou? Reabra',
+     p:'Na fila, escolha «Indexadas» e abra a norma. O que você gravar entra como correção, e a indexação anterior continua no histórico.',
+     cena:() => cenaFila('indexadas') },
+   { c:'A exportação', t:'No fim, a exportação',
+     p:'Na fila ficam os botões Exportar Excel e Exportar CSV. O repositório carrega o arquivo, e a busca do Memória SPU passa a usar o que foi registrado.',
+     cena:() => cenaFila('exportar') } ]}
+];
+
+/* ============ navegação ============ */
+const $ = s => document.querySelector(s);
+const LISTA = [];
+CAPS.forEach((cap, ci) => cap.passos.forEach((p, pi) => LISTA.push({ ...p, ci, pi })));
+let i = 0; const visto = new Set([0]);
+
+const caps = $('#caps');
+CAPS.forEach((cap, ci) => {
+  const b = document.createElement('button');
+  b.className = 'cap'; b.textContent = cap.nome;
+  b.onclick = () => { i = LISTA.findIndex(p => p.ci === ci); render(); };
+  caps.appendChild(b);
+});
+
+function render(){
+  const p = LISTA[i], cap = CAPS[p.ci];
+  visto.add(i);
+  $('#fase').textContent = cap.nome;
+  $('#t').textContent = p.t;
+  $('#p').textContent = p.p;
+  $('#conta').textContent = 'Passo ' + (i + 1) + ' de ' + LISTA.length;
+  $('#palco').innerHTML = p.cena();
+
+  // o texto rola até o trecho aceso, como faz o clique no termo na ferramenta
+  const tx = document.querySelector('.tx');
+  if (tx) {
+    const aceso = [...tx.querySelectorAll('[data-m]')]
+      .find(e => (tx.dataset.luz || '').split(' ').includes(e.dataset.m));
+    const caixa = tx.parentElement;
+    caixa.scrollTop = aceso ? Math.max(0, aceso.offsetTop - caixa.offsetTop - 60) : 0;
+  }
+
+  [...caps.children].forEach((b, ci) => {
+    b.setAttribute('aria-current', ci === p.ci ? 'true' : 'false');
+    b.classList.toggle('feito', ci < p.ci);
+    if (ci === p.ci) b.scrollIntoView({ block:'nearest', inline:'nearest' });
+  });
+
+  const base = LISTA.findIndex(x => x.ci === p.ci);
+  $('#bolinhas').innerHTML = '';
+  cap.passos.forEach((q, pi) => {
+    const b = document.createElement('button');
+    b.className = 'bola' + (visto.has(base + pi) && pi !== p.pi ? ' visto' : '');
+    if (pi === p.pi) b.setAttribute('aria-current', 'step');
+    b.setAttribute('aria-label', q.c);
+    b.innerHTML = '<span class="nome">' + q.c + '</span>';
+    b.onclick = () => { i = base + pi; render(); };
+    $('#bolinhas').appendChild(b);
+  });
+
+  $('#voltar').disabled = i === 0;
+  $('#avancar').disabled = i === LISTA.length - 1;
+}
+
+function anda(d){
+  const n = i + d;
+  if (n < 0 || n >= LISTA.length) return;
+  i = n; render();
+}
+$('#avancar').onclick = () => anda(1);
+$('#voltar').onclick = () => anda(-1);
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') anda(1);
+  if (e.key === 'ArrowLeft') anda(-1);
+});
+render();
+</script>
