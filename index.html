@@ -431,8 +431,21 @@ let selAssuntos = [], selPalavras = [], decisoesRel = {}, campos = {};
    relação da mesma origem, que é a assinatura desse vazamento.
    Sem poder corrigir o tipo, quem revisa só tinha saídas ruins: confirmar o tipo errado,
    ou rejeitar e reincluir à mão — e a inclusão manual não alimenta `ato_revogacao`, então
-   a revogação total sumiria do campo que a registra. */
+   a revogação total sumiria do campo que a registra.
+   Desde 24/11/2026 o tipo parcial não existe mais (virou `altera`), e o vazamento chega
+   como "altera" — a correção para "revoga (integral)" continua sendo o caminho. */
 let tiposRel = {};
+/* `revoga_parcialmente` foi unificado em `altera` em 24/11/2026, por decisão da chefia:
+   revogar parte de uma norma é alterá-la. As 139 relações do banco foram migradas (27
+   fundidas com o "altera" que já existia para o mesmo par). Mas etapas e rascunhos
+   gravados antes guardam o tipo antigo em `tipos_rel` — este mapa os lê como `altera`,
+   para a correção feita naquela época continuar valendo sem ressuscitar o tipo. */
+function tipoAtual(t){ return t === 'revoga_parcialmente' ? 'altera' : t; }
+function normalizarTiposRel(o){
+  const out = {};
+  Object.keys(o || {}).forEach(k => { out[k] = tipoAtual(o[k]); });
+  return out;
+}
 let estagioAtual = 'esp1';
 // O resultado da ferramenta serve para refinar a taxonomia e as regras de indexação.
 // Por isso o que foi RECUSADO importa tanto quanto o aceito — foi assim que se mediu a
@@ -519,10 +532,12 @@ const SITUACOES = ['Vigente sem alteração','Vigente com alteração','Suspenso
 
    `suspende` entrou em 04/11/2026: a norma suspensa não foi revogada nem alterada — ela
    continua existindo, com a eficácia parada, e pode voltar. A suspensão parcial se diz
-   listando os dispositivos afetados, como nas demais; não há `suspende_parcialmente`. */
+   listando os dispositivos afetados, como nas demais; não há `suspende_parcialmente`.
+
+   `revoga_parcialmente` saiu em 24/11/2026: unificado em `altera`, por decisão da chefia.
+   Revogação parcial agora é `altera` com os dispositivos afetados listados. */
 const TIPOS_REL = {
   revoga:              { opcao:'revoga (integral)', ativa:'revoga',          passiva:'revogada' },
-  revoga_parcialmente: { opcao:'revoga em parte',   ativa:'revoga em parte', passiva:'revogada em parte' },
   suspende:            { opcao:'suspende',          ativa:'suspende',        passiva:'suspensa' },
   altera:              { opcao:'altera',            ativa:'altera',          passiva:'alterada' },
   regulamenta:         { opcao:'regulamenta',       ativa:'regulamenta',     passiva:'regulamentada' },
@@ -1103,7 +1118,7 @@ async function abrir(id){
     // sido registrado — e o trabalho estava gravado, só não era lido de volta.
     legisManuais = (campos.legis_manuais || []).slice();
     decisoesRel = Object.assign({}, campos.decisoes_rel || {});
-    tiposRel = Object.assign({}, campos.tipos_rel || {});
+    tiposRel = normalizarTiposRel(campos.tipos_rel);
   } else {
     campos.situacao_norma = d.situacao_norma || '';
   }
@@ -1116,7 +1131,7 @@ async function abrir(id){
     if (Array.isArray(r.assuntos)) selAssuntos = r.assuntos.slice();
     if (Array.isArray(r.palavras)) selPalavras = r.palavras.slice();
     if (r.decisoesRel) decisoesRel = Object.assign({}, r.decisoesRel);
-    if (r.tiposRel) tiposRel = Object.assign({}, r.tiposRel);
+    if (r.tiposRel) tiposRel = normalizarTiposRel(r.tiposRel);
     if (Array.isArray(r.legisManuais)) legisManuais = r.legisManuais.slice();
     if (Array.isArray(r.propostasNovas)) propostasNovas = r.propostasNovas.slice();
     if (typeof r.patrimonial === 'boolean') patrimonial = r.patrimonial;
@@ -1142,7 +1157,7 @@ async function abrir(id){
   // e dispositivos segmentados
   const { count: nAlt } = await sb.from('relacoes_norma')
     .select('id', { count:'exact', head:true }).eq('destino_id', id)
-    .in('tipo', ['altera','revoga_parcialmente']);
+    .eq('tipo', 'altera');
   const { count: nDisp } = await sb.from('dispositivos')
     .select('id', { count:'exact', head:true }).eq('documento_id', id);
   /* Quem já passou por esta norma, com data. Com um estágio só, o rótulo "Especialista 1"
@@ -1542,31 +1557,34 @@ function chaveNorma(d){
 // Revogações que apontam PARA esta norma. Direção importa: o que interessa aqui é o que
 // aconteceu com ela, não o que ela fez com as outras.
 function revogacoesApontando(){
-  return (relAtual || []).filter(r => r.destino_id === docAtual.id && /^revoga/.test(r.tipo));
+  return (relAtual || []).filter(r => r.destino_id === docAtual.id && tipoDe(r) === 'revoga');
+}
+function alteracoesApontando(){
+  return (relAtual || []).filter(r => r.destino_id === docAtual.id && tipoDe(r) === 'altera');
 }
 
 /* O grafo não preenche a Situação da Norma — ele a CONTESTA. O campo é obrigatório e
    nunca fica vazio; o problema relatado pela equipe é a desatualização, norma que consta
    vigente e já foi revogada. São 61 normas na coleção nessa condição.
-   "Vigente com alteração" + revogação PARCIAL é coerente e não deve avisar. */
+   "Vigente com alteração" + alteração (inclusive revogação de parte) é coerente e não
+   deve avisar; "Vigente sem alteração" + alteração apontando para ela, sim. */
 function avisoSituacao(){
   const s = campos.situacao_norma || '';
   if (!/^vigente/i.test(s)) return '';
-  const revs = revogacoesApontando();
-  const totais = revs.filter(r => r.tipo === 'revoga');
-  const parciais = revs.filter(r => r.tipo === 'revoga_parcialmente');
+  const totais = revogacoesApontando();
+  const parciais = alteracoesApontando();
   const contradiz = totais.length || (parciais.length && /sem\s+altera/i.test(s));
   if (!contradiz) return '';
   const quais = (totais.length ? totais : parciais).slice(0, 3).map(r => {
     const o = r.origem || {};
     const ev = (r.evidencia || '').replace(/\s+/g, ' ').trim().slice(0, 160);
     return `<div style="margin-top:5px"><b>${esc(o.titulo || 'norma não resolvida')}</b>
-      ${r.tipo === 'revoga' ? 'revoga esta norma' : 'revoga parte desta norma'}
+      ${totais.length ? 'revoga esta norma' : 'altera esta norma'}
       ${ev ? `<div class="ajuda" style="margin:2px 0 0">“${esc(ev)}…”</div>` : ''}</div>`;
   }).join('');
   return `<div class="aviso">
     <b>A situação declarada contradiz o que o grafo encontrou.</b>
-    Consta <b>${esc(s)}</b>, e há ${totais.length ? 'revogação total' : 'revogação parcial'}
+    Consta <b>${esc(s)}</b>, e há ${totais.length ? 'revogação total' : 'alteração'}
     apontando para ela. Confira antes de seguir — a relação ainda não foi confirmada por ninguém.
     ${quais}</div>`;
 }
@@ -2509,7 +2527,7 @@ function ehRetificacao(){
 }
 function decidirRel(id, v){ decisoesRel[id] = decisoesRel[id] === v ? undefined : v; renderFicha(); }
 /* O tipo que vale: o corrigido por quem revisa, ou o que o extrator sugeriu. */
-function tipoDe(r){ return tiposRel[r.id] || r.tipo; }
+function tipoDe(r){ return tipoAtual(tiposRel[r.id] || r.tipo); }
 function corrigirTipoRel(id, t){
   const r = relAtual.find(x => x.id === id);
   if (!r) return;
@@ -2785,14 +2803,12 @@ async function salvarUmaVez(modo){
     legislacao_relacionada_titulos: relacionadas.map(x => x.titulo),
     legislacao_sem_cadastro: semId,
     ato_alteracao: idsDe(r => tipoDe(r)==='altera' && r.origem_id===docAtual.id, r => r.destino_id),
-    // Só revogação TOTAL entra em "Ato de Revogação". Revogação parcial ali dentro faria a
+    // Só revogação TOTAL entra em "Ato de Revogação". Revogação de parte ali dentro faria a
     // norma constar como revogada quando ela segue vigente com um ou dois artigos a menos —
-    // é o erro encontrado na Portaria 7.081. Vai para campo próprio e para legislação relacionada.
+    // é o erro encontrado na Portaria 7.081. Desde 24/11/2026 revogar em parte é `altera`.
+    // (Os campos `revogacao_parcial` e `dispositivos_revogados` deixaram de ser gravados
+    // nessa data; etapas antigas ainda os trazem, e nenhum export os lê.)
     ato_revogacao: idsDe(r => tipoDe(r)==='revoga' && r.destino_id===docAtual.id, r => r.origem_id),
-    revogacao_parcial: idsDe(r => tipoDe(r)==='revoga_parcialmente' && r.destino_id===docAtual.id, r => r.origem_id),
-    dispositivos_revogados: [...new Set(confirmadas
-      .filter(r => tipoDe(r)==='revoga_parcialmente' && r.destino_id===docAtual.id)
-      .flatMap(r => r.dispositivos_afetados || []))],
     norma_regulamentacao: idsDe(r => tipoDe(r)==='regulamenta', r => r.destino_id),
     // simétrica: a "outra ponta" depende de qual lado esta norma ocupa na relação
     relacao_a_esclarecer: [...new Set(confirmadas.filter(r => tipoDe(r)==='a_esclarecer')
@@ -3113,7 +3129,7 @@ async function gerarCompilado(){
   const alvo = docAtual;
   const { data: rels } = await sb.from('relacoes_norma')
     .select('origem_id,tipo,status').eq('destino_id', alvo.id)
-    .in('tipo', ['altera','revoga_parcialmente']);
+    .eq('tipo', 'altera');
   if (!rels || !rels.length) { alert('Esta norma não tem alterações registradas.'); return; }
 
   const origens = [...new Set(rels.map(r => r.origem_id))].filter(Boolean);

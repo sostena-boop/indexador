@@ -500,7 +500,7 @@ function fRel(o){
   return `<h3 class="blo">Relações entre normas</h3>
     <div class="ajuda" style="margin:0 0 8px">Detectadas na ementa e no Art. 1º. Confirme uma a uma — o trecho que originou cada detecção está à vista.</div>
     ${cartao('revoga (integral)','revoga','PORTARIA CONJUNTA MGI/CGU Nº 96, DE 12 DE DEZEMBRO DE 2025 Revoga a Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021', o.a, o.foco==='a')}
-    ${cartao('revoga em parte','revoga em parte','96, DE 12 DE DEZEMBRO DE 2025 Revoga a Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021, que instituía regime especial de governança para a destinação de imóveis da União. A MINISTRA DE ESTADO DA GESTÃO E DA INOVAÇÃO EM SERVIÇOS PÚBLICOS e o MINISTRO DE ES', o.b, o.foco==='b', 'art.32, art.49, art.87, incisoi, incisovii, parágrafoúnico')}
+    ${cartao('altera','altera','96, DE 12 DE DEZEMBRO DE 2025 Revoga a Portaria Interministerial ME/CGU nº 6.909, de 21 de junho de 2021, que instituía regime especial de governança para a destinação de imóveis da União. A MINISTRA DE ESTADO DA GESTÃO E DA INOVAÇÃO EM SERVIÇOS PÚBLICOS e o MINISTRO DE ES', o.b, o.foco==='b', 'art.32, art.49, art.87, incisoi, incisovii, parágrafoúnico')}
     ${o.manual ? `<div class="caixa foco" style="padding:9px 11px"><b style="font-size:12px">Relacionar à mão — quando a detecção não achou</b>
       <div style="display:flex;gap:6px;margin:7px 0;flex-wrap:wrap"><span class="sel-falso">esta norma…</span><span class="sel-falso">não está sendo fácil</span></div>
       <div class="entrada ph">digite parte do título ou o número da outra norma</div></div>` : ''}`;
@@ -609,7 +609,7 @@ const CAPS = [
      p:'Cada relação detectada vem com a frase que a originou. Confira no texto e confirme uma a uma.',
      cena:() => telaNorma({ norma:'n96', luz:'revoga', ficha:fRel({ a:'sim', foco:'a' }) }) },
    { c:'A detecção erra', t:'A detecção também erra',
-     p:'Aqui ela leu um artigo da Constituição, citado no preâmbulo, como revogação em parte. Diga não, ou corrija o tipo.',
+     p:'Aqui ela leu um artigo da Constituição, citado no preâmbulo, como alteração. Diga não, ou corrija o tipo.',
      cena:() => telaNorma({ norma:'n96', luz:'const', ficha:fRel({ a:'sim', b:'nao', foco:'b' }) }) },
    { c:'Relacionar à mão', t:'Não detectou? Relacione à mão',
      p:'Escolha o tipo e busque a outra norma. Para conflito ou dúvida de validade, o tipo é «não está sendo fácil».',
