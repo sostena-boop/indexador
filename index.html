@@ -49,10 +49,6 @@ header.com-abas { padding-bottom:0; border-bottom:none; }
 .exp-cartao p { font-size:14px; line-height:1.6; margin:0 0 10px; }
 .exp-cartao ul { margin:0 0 14px; padding-left:18px; font-size:13.5px; line-height:1.6; color:var(--ink); }
 .exp-cartao .b { margin-top:auto; align-self:flex-start; }
-.exp-opcao { display:flex; gap:9px; align-items:flex-start; font-size:14px; font-weight:600; margin:0 0 6px;
-  cursor:pointer; line-height:1.45; }
-.exp-opcao input { margin:3px 0 0; width:16px; height:16px; accent-color:var(--accent); flex:none; }
-.exp-nota { font-size:12.5px !important; color:var(--muted); margin:0 0 14px !important; }
 .exp-aviso { background:var(--warn-bg); color:var(--warn); border-radius:10px; padding:10px 13px;
   font-size:13.5px; line-height:1.55; margin:0 0 14px; }
 .exp-resultado { background:var(--ok-bg); border:1px solid var(--line); border-radius:14px; padding:16px 18px;
@@ -352,15 +348,12 @@ select.tp:hover { border-color:var(--terra); }
            dos campos que o Memória SPU usa.</p>
         <ul>
           <li>Entram as normas dos lotes liberados que já têm ficha no Memória SPU.</li>
+          <li>As normas recusadas na triagem, por não serem patrimoniais, ficam de fora.
+              Quais são e por quê está na planilha Excel.</li>
           <li>Campo que ficar em branco não apaga nada lá: a ficha continua como está.</li>
         </ul>
         <div class="exp-aviso"><b>Não abra nem salve este arquivo no Excel</b> antes de enviar.
           O Excel troca o formato das datas, e elas chegam erradas ao Memória SPU.</div>
-        <label class="exp-opcao"><input type="checkbox" id="expSemNaoPatr" checked>
-          Deixar de fora as normas recusadas como não patrimoniais</label>
-        <p class="exp-nota">A última coluna, «Controle: norma patrimonial?», diz o que a triagem
-          decidiu. Ela é só para conferência: na importação, fica sem campo correspondente.
-          Para tirar as não patrimoniais, use a opção acima, e não um filtro no Excel.</p>
         <button class="b" id="btnExpCsv" onclick="exportarCSV()">Baixar o arquivo CSV</button>
       </div>
       <div class="exp-cartao sec">
@@ -398,8 +391,6 @@ select.tp:hover { border-color:var(--terra); }
           <li>Codificação: <b>UTF-8</b> (não deixar em «Automática»).</li>
           <li>Delimitador de coluna: <b>vírgula</b>. Delimitador de valores múltiplos: <b>||</b>.</li>
           <li>Mapear cada coluna para o campo que <b>já existe</b>. Nunca «Criar metadado».</li>
-          <li>A última coluna, «Controle: norma patrimonial?», <b>não</b> tem campo correspondente:
-              deixá-la sem mapeamento, e o importador a ignora.</li>
           <li>Termos de assunto, regime ou situação que ainda não existirem na coleção são
               criados pela importação. Vale combinar antes.</li>
         </ul>
@@ -3521,20 +3512,21 @@ function fonteDoMetadado(rotulo){
    registros: [{doc, campos, termos, plan, revogadoPor}]
    idNaColecao: { id antigo -> id na coleção }, para os campos de relacionamento
    Devolve a matriz (cabeçalho + linhas) e a contagem do que ficou de fora, por motivo. */
-/* A coluna de CONTROLE (24/11/2026). Pedido do Juarez: saber, no próprio CSV, se a norma
-   foi considerada patrimonial na triagem. Ela vai no fim e não corresponde a campo nenhum
-   da coleção: na importação fica SEM mapeamento, e o importador a ignora (nunca «Criar
-   metadado», que faria nascer o campo lá). Valores: "sim", "não", ou vazio quando
-   ninguém fez a triagem.
-   Tirar as linhas "não" é opção da própria ferramenta (`semNaoPatrimoniais`), para que
-   ninguém precise filtrar o CSV no Excel — que é justamente o que estraga as datas. */
+/* A coluna de CONTROLE, «Controle: norma patrimonial?» ("sim", "não", ou vazio quando
+   ninguém fez a triagem). Desde 25/11/2026, a pedido do Juarez, ela só sai na PLANILHA
+   (`comControle`): o CSV tem foco único, a importação no Memória SPU, e leva só campos da
+   coleção. Pelo mesmo motivo o CSV deixa SEMPRE de fora as normas recusadas na triagem —
+   não há mais caixa para desmarcar, porque sem a coluna elas iriam misturadas às outras,
+   sem marca nenhuma. A planilha mostra todas (`incluirRecusadas`) e diz por que cada uma
+   ficou fora do CSV. */
 const COLUNA_CONTROLE_PATRIMONIAL = 'Controle: norma patrimonial?';
 function triagemDoRegistro(r){ return r.triagem === 'sim' || r.triagem === 'não' ? r.triagem : ''; }
 
 function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
   // `incluirSemId` é para a planilha de acompanhamento, que mostra também quem ficou fora
   const incluirSemId = !!(opcoes && opcoes.incluirSemId);
-  const semNaoPatrimoniais = !!(opcoes && opcoes.semNaoPatrimoniais);
+  const incluirRecusadas = !!(opcoes && opcoes.incluirRecusadas);
+  const comControle = !!(opcoes && opcoes.comControle);
   // A lista fechada de órgãos da coleção (nomes dos termos da taxonomia do metadado),
   // lida ao vivo. null = não deu para ler, e o aviso diz que o órgão não foi conferido.
   const termosOrgao = opcoes && Array.isArray(opcoes.termosOrgao)
@@ -3544,13 +3536,14 @@ function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
                  siglaMarcas: 0, siglaVazia: [], siglaDiverge: [],
                  orgaoForaDaLista: {}, orgaoNaoConferido: !termosOrgao };
   const semFonte = estrutura.filter(m => !fonteDoMetadado(m.rotulo)).map(m => m.rotulo);
-  const matriz = [['special_item_id'].concat(estrutura.map(m => m.rotulo), [COLUNA_CONTROLE_PATRIMONIAL])];
+  const matriz = [['special_item_id'].concat(estrutura.map(m => m.rotulo),
+                                             comControle ? [COLUNA_CONTROLE_PATRIMONIAL] : [])];
   const temSigla = estrutura.some(m => chaveRotulo(m.rotulo).indexOf('sigladoorgao') === 0);
   const nomeDaNorma = r => ({ id: r.doc.item_id_colecao ? String(r.doc.item_id_colecao) : '',
                               titulo: r.doc.titulo || '' });
 
   registros.forEach(r0 => {
-    if (semNaoPatrimoniais && triagemDoRegistro(r0) === 'não') { fora.naoPatrimoniais++; return; }
+    if (triagemDoRegistro(r0) === 'não') { fora.naoPatrimoniais++; if (!incluirRecusadas) return; }
     if (!r0.doc.item_id_colecao) { fora.semId++; if (!incluirSemId) return; }
     // a sigla é calculada uma vez por norma, e o que mudou nela vai para o aviso
     const sig = siglaParaExportar(orgaosDoRegistro(r0), siglasDaPlanilha(r0));
@@ -3597,7 +3590,7 @@ function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
       }
       linha.push(v.join('||'));
     });
-    linha.push(triagemDoRegistro(r0));
+    if (comControle) linha.push(triagemDoRegistro(r0));
     matriz.push(linha);
   });
   return { matriz, fora, semFonte };
@@ -3739,14 +3732,15 @@ async function dadosParaExportar(){
 const COLUNAS_SO_DA_PLANILHA = ['Entra no arquivo do Memória SPU?', 'Lote', 'Id no acervo antigo',
   'Norma de regulamentação', 'Ato de alteração', 'Relação a esclarecer', 'Motivo da recusa', 'Observações', 'Marcada com dúvida', 'Dúvida — qual', 'Indexado por', 'Indexado em'];
 function linhasDaPlanilha(estrutura, registros, idNaColecao){
-  const base = montarCsvColecao(estrutura, registros, idNaColecao, { incluirSemId: true });
+  const base = montarCsvColecao(estrutura, registros, idNaColecao,
+                                { incluirSemId: true, incluirRecusadas: true, comControle: true });
   const ids = v => [...new Set(partes(v, '||').map(x => idNaColecao[x]).filter(Boolean).map(String))].join('||');
   const matriz = [base.matriz[0].concat(COLUNAS_SO_DA_PLANILHA)];
   registros.forEach((r, i) => {
     const x = r.extra || {}, c = r.campos || {};
     matriz.push(base.matriz[i + 1].concat([
       !r.doc.item_id_colecao ? 'não — ainda sem ficha identificada no Memória SPU'
-        : triagemDoRegistro(r) === 'não' ? 'não, se marcada a opção de deixar de fora as não patrimoniais'
+        : triagemDoRegistro(r) === 'não' ? 'não — recusada na triagem'
         : 'sim',
       x.lote || '', x.idAntigo ? String(x.idAntigo) : '',
       ids(c.norma_regulamentacao), ids(c.ato_alteracao), ids(c.relacao_a_esclarecer),
@@ -3764,7 +3758,7 @@ function mostrarResultadoExport(html, alerta){
 function resumoDoQueFicouDeFora(fora){
   const li = [];
   if (fora.naoPatrimoniais) li.push('<b>' + fora.naoPatrimoniais + '</b> normas recusadas na triagem por ' +
-    'não serem patrimoniais. Saíram porque a opção estava marcada.');
+    'não serem patrimoniais. A planilha Excel diz quais são.');
   if (fora.semId) li.push('<b>' + fora.semId + '</b> normas ainda sem ficha identificada no Memória SPU. ' +
     'Não entram no CSV, para não criar ficha repetida.');
   if (fora.relSemId) li.push('<b>' + fora.relSemId + '</b> citações a normas relacionadas que ainda não ' +
@@ -3846,12 +3840,11 @@ async function exportarCSV(){
   await comBotaoOcupado('btnExpCsv', async () => {
     const d = await dadosParaExportar();
     if (d.erro) { mostrarResultadoExport(esc(d.erro), true); return; }
-    const opcao = document.getElementById('expSemNaoPatr');
     // a lista fechada de órgãos: os termos da taxonomia que o metadado de órgão lê
     const mdOrgao = d.estrutura.metadados.find(m => chaveRotulo(m.rotulo).indexOf('orgaoentidade') === 0);
     const termosOrgao = await termosDaTaxonomia(mdOrgao && mdOrgao.taxonomia);
     const { matriz, fora, semFonte } = montarCsvColecao(d.estrutura.metadados, d.registros, d.idNaColecao,
-      { semNaoPatrimoniais: !opcao || opcao.checked, termosOrgao });
+      { termosOrgao });
     if (matriz.length === 1) {
       mostrarResultadoExport('Nenhuma norma dos lotes liberados tem ficha identificada no Memória SPU. ' +
         'Nada foi baixado.', true);
