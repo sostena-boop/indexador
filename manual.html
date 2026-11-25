@@ -201,6 +201,19 @@ table.fila td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align
 .etapa span{font-size:11.5px;color:var(--muted)}
 .etapa.sua{border-color:var(--accent);background:var(--ok-bg)}
 .vai{align-self:center;color:var(--terra);font-size:16px;flex:none}
+.abas-f{display:flex;gap:5px;flex:none}
+.abas-f span{font-family:"Fraunces",serif;font-weight:600;font-size:12.5px;padding:5px 13px;
+  border-radius:9px 9px 0 0;background:rgba(30,92,79,.10);color:var(--accent-dark);border-top:3px solid transparent}
+.abas-f span.ativa{background:var(--ice);border-top-color:var(--terra)}
+.exp-g{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.exp-c{border:1px solid var(--line);border-top:4px solid var(--accent);border-radius:12px;background:var(--branco);
+  padding:11px 13px;display:flex;flex-direction:column}
+.exp-c.sec{border-top-color:var(--terra)}
+.exp-c h4{font-family:"Fraunces",serif;font-weight:600;font-size:14px;margin:0 0 2px}
+.exp-c .para{font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin:0 0 7px}
+.exp-c ul{margin:0 0 8px;padding-left:16px;line-height:1.5}
+.exp-c .aviso{margin-bottom:8px}
+.exp-c .b{margin-top:auto;align-self:flex-start}
 
 /* ---------- rodapé ---------- */
 .rodape{position:relative;display:flex;align-items:center;justify-content:center;gap:14px;
@@ -359,15 +372,6 @@ function cenaFila(modo){
       <div class="nota-manual"><small>no alto da ficha, depois de abrir</small>
         <span class="pill">já indexada — você está corrigindo</span>
         <span class="pill fim">indexou: Fulano</span></div>`;
-  if (modo === 'exportar') corpo = `<div class="nota-manual" style="margin-top:4px"><small>o caminho do arquivo</small>
-      <div class="fluxo">
-        <div class="etapa sua"><b>Indexador</b><span>planilha Excel completa e CSV para o Tainacan</span></div>
-        <span class="vai">→</span>
-        <div class="etapa"><b>Repositório</b><span>carrega o arquivo e decide sobre as correções de cadastro propostas</span></div>
-        <span class="vai">→</span>
-        <div class="etapa"><b>Memória SPU</b><span>a busca passa a usar o que foi registrado</span></div>
-      </div></div>`;
-  const exporta = `<span class="b sec">Exportar Excel</span><span class="b sec">Exportar CSV</span>`;
   return `<div class="rot-palco">Indexador · fila de revisão</div>
     <div class="cartao" style="flex:1">
       <h3 class="blo">Fila de revisão</h3>
@@ -375,10 +379,49 @@ function cenaFila(modo){
         <span class="sel-falso${f(modo==='indexadas','foco')}">${modo === 'indexadas' ? 'Indexadas — trabalho concluído' : 'A indexar — ninguém pegou ainda'}</span>
         <span class="entrada${f(modo!=='busca','ph')}${f(modo==='busca','foco')}" style="flex:1;min-width:150px">${modo === 'busca' ? '3.852' : 'buscar no título, número ou texto da norma'}</span>
         <span class="sel-falso">Todos os tipos</span>
+        <span class="sel-falso">Ano — mais recentes primeiro</span>
         <span class="b sec">Painel</span>
-        ${modo === 'exportar' ? `<span class="foco" style="display:inline-flex;gap:7px">${exporta}</span>` : exporta}
       </div>
       ${corpo}
+    </div>`;
+}
+
+/* A aba Exportação, como está na ferramenta desde 20/11/2026: dois cartões, um botão em cada.
+   Os botões de exportar não ficam mais na fila. */
+function cenaExportacao(){
+  return `<div class="rot-palco">Indexador · aba Exportação</div>
+    <div class="abas-f"><span>Indexação</span><span class="ativa">Exportação</span><span>Manual</span></div>
+    <div class="cartao" style="flex:1;border-top-left-radius:0">
+      <div class="exp-g">
+        <div class="exp-c">
+          <h4>Arquivo para o Memória SPU</h4>
+          <p class="para">formato CSV · para importar</p>
+          <ul>
+            <li>Entram as normas que já têm ficha no Memória SPU.</li>
+            <li>As recusadas na triagem ficam de fora.</li>
+            <li>Campo em branco não apaga nada lá.</li>
+          </ul>
+          <div class="aviso"><b>Não salve este arquivo pelo Excel</b> antes de enviar.</div>
+          <span class="b foco">Baixar o arquivo CSV</span>
+        </div>
+        <div class="exp-c sec">
+          <h4>Planilha de acompanhamento</h4>
+          <p class="para">formato Excel · para ler e conferir</p>
+          <ul>
+            <li>Diz, norma por norma, se ela entrou no arquivo do Memória SPU e por quê.</li>
+            <li>Observações, dúvidas e normas recusadas na triagem.</li>
+          </ul>
+          <span class="b sec">Baixar a planilha Excel</span>
+        </div>
+      </div>
+      <div class="nota-manual"><small>o caminho do arquivo</small>
+        <div class="fluxo">
+          <div class="etapa sua"><b>Indexador</b><span>CSV para o Memória SPU e planilha Excel para conferir</span></div>
+          <span class="vai">→</span>
+          <div class="etapa"><b>Repositório</b><span>carrega o arquivo e decide sobre as correções de cadastro propostas</span></div>
+          <span class="vai">→</span>
+          <div class="etapa"><b>Memória SPU</b><span>a busca passa a usar o que foi registrado</span></div>
+        </div></div>
     </div>`;
 }
 
@@ -629,8 +672,8 @@ const CAPS = [
      p:'Na fila, escolha «Indexadas» e abra a norma. O que você gravar entra como correção, e a indexação anterior continua no histórico.',
      cena:() => cenaFila('indexadas') },
    { c:'A exportação', t:'No fim, a exportação',
-     p:'Na fila ficam os botões Exportar Excel e Exportar CSV. O repositório carrega o arquivo, e a busca do Memória SPU passa a usar o que foi registrado.',
-     cena:() => cenaFila('exportar') } ]}
+     p:'Na aba Exportação, «Baixar o arquivo CSV» gera o arquivo para o Memória SPU, e a planilha Excel serve para conferir. O repositório carrega o arquivo, e a busca passa a usar o que foi registrado.',
+     cena:() => cenaExportacao() } ]}
 ];
 
 /* ============ navegação ============ */

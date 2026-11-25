@@ -352,8 +352,9 @@ select.tp:hover { border-color:var(--terra); }
               Quais são e por quê está na planilha Excel.</li>
           <li>Campo que ficar em branco não apaga nada lá: a ficha continua como está.</li>
         </ul>
-        <div class="exp-aviso"><b>Não abra nem salve este arquivo no Excel</b> antes de enviar.
-          O Excel troca o formato das datas, e elas chegam erradas ao Memória SPU.</div>
+        <div class="exp-aviso"><b>Não salve este arquivo pelo Excel</b> antes de enviar.
+          O Excel muda a codificação e o separador, e o Memória SPU aceita o arquivo perdendo
+          colunas inteiras, inclusive o título, sem avisar.</div>
         <button class="b" id="btnExpCsv" onclick="exportarCSV()">Baixar o arquivo CSV</button>
       </div>
       <div class="exp-cartao sec">
@@ -3324,8 +3325,10 @@ function motivoDaRecusa(e){
        "Ministério da Economia||Ministério do Turismo");
      - campo numérico só recebe dígitos; campo de data sai no formato do TIPO do metadado:
        Text → dd/mm/aaaa, Date → aaaa-mm-dd (24/11/2026);
-     - sigla sem os restos de fórmula da planilha, e órgão conferido contra a lista
-       fechada da coleção — ver «sigla e órgão», abaixo (24/11/2026);
+     - sigla sem os restos de fórmula da planilha — ver «sigla e órgão», abaixo (24/11/2026);
+     - todo campo de taxonomia, menos Palavra-chave, conferido contra os termos da coleção,
+       pelo caminho "Pai>>Filho": o que não existe lá é apontado, porque a importação o
+       criaria como termo novo (órgão em 24/11/2026; os demais em 25/11/2026);
      - campo de relacionamento recebe o id da ficha NA COLEÇÃO, traduzido do id antigo;
        norma relacionada que ainda não tem esse id fica de fora, contada;
      - ficha sem `item_id_colecao` não entra: linha sem id cria item novo, em silêncio. */
@@ -3469,6 +3472,10 @@ function dataParaExportar(v, tipo){
 function chaveTermoColecao(s){
   return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
+// Termo de taxonomia hierárquica vai no CSV como caminho, "Pai>>Filho", e o importador
+// procura cada nível sob o pai certo. Por isso a conferência é pelo caminho inteiro: o
+// mesmo nome sob outro pai também viraria termo novo. Termo de primeiro nível = o nome.
+function chaveCaminho(s){ return String(s || '').split('>>').map(chaveTermoColecao).join('>>'); }
 
 /* De onde sai cada metadado. A chave é o COMEÇO do rótulo normalizado — "assunto" casa
    com "Assunto (funções finalisticas)" e continuaria casando se o parêntese sumisse.
@@ -3527,14 +3534,18 @@ function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
   const incluirSemId = !!(opcoes && opcoes.incluirSemId);
   const incluirRecusadas = !!(opcoes && opcoes.incluirRecusadas);
   const comControle = !!(opcoes && opcoes.comControle);
-  // A lista fechada de órgãos da coleção (nomes dos termos da taxonomia do metadado),
-  // lida ao vivo. null = não deu para ler, e o aviso diz que o órgão não foi conferido.
-  const termosOrgao = opcoes && Array.isArray(opcoes.termosOrgao)
-    ? new Set(opcoes.termosOrgao.map(chaveTermoColecao)) : null;
+  // As listas fechadas da coleção: { rótulo do metadado: [caminhos dos termos] }, lidas ao
+  // vivo, uma por metadado de taxonomia (menos Palavra-chave, onde termo novo é esperado).
+  // null = não deu para ler, e o aviso diz que aquele campo não foi conferido.
+  const listas = {}, naoConferidos = [];
+  Object.entries((opcoes && opcoes.listasFechadas) || {}).forEach(([rotulo, caminhos]) => {
+    if (Array.isArray(caminhos)) listas[rotulo] = new Set(caminhos.map(chaveCaminho));
+    else naoConferidos.push(rotulo);
+  });
   const fora = { semId: 0, naoCoube: {}, relSemId: 0, numeroInvalido: 0, dataInvalida: 0, naoPatrimoniais: 0,
                  // o que não fica de fora, mas o aviso precisa dizer
                  siglaMarcas: 0, siglaVazia: [], siglaDiverge: [],
-                 orgaoForaDaLista: {}, orgaoNaoConferido: !termosOrgao };
+                 foraDaLista: {}, listaNaoConferida: naoConferidos };
   const semFonte = estrutura.filter(m => !fonteDoMetadado(m.rotulo)).map(m => m.rotulo);
   const matriz = [['special_item_id'].concat(estrutura.map(m => m.rotulo),
                                              comControle ? [COLUNA_CONTROLE_PATRIMONIAL] : [])];
@@ -3582,11 +3593,14 @@ function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
         fora.naoCoube[m.rotulo] = (fora.naoCoube[m.rotulo] || 0) + 1;
         v = v.slice(0, 1);
       }
-      // Órgão fora da lista fechada: na importação viraria termo novo. Aponta, não reescreve —
-      // a planilha é a base, e a correção do nome vai para a devolutiva.
-      if (termosOrgao && k.indexOf('orgaoentidade') === 0) {
-        v.filter(x => !termosOrgao.has(chaveTermoColecao(x)))
-          .forEach(x => { fora.orgaoForaDaLista[x] = (fora.orgaoForaDaLista[x] || 0) + 1; });
+      // Valor fora da lista fechada: na importação viraria termo novo — mesmo com «não aceitar
+      // termos novos» ligado, que o importador não respeita (teste B, 24/11/2026). Aponta, não
+      // reescreve: a planilha é a base, e a correção vai para a devolutiva.
+      const lista = listas[m.rotulo];
+      if (lista) {
+        const f = fora.foraDaLista[m.rotulo] = fora.foraDaLista[m.rotulo] || {};
+        v.filter(x => !lista.has(chaveCaminho(x))).forEach(x => { f[x] = (f[x] || 0) + 1; });
+        if (!Object.keys(f).length) delete fora.foraDaLista[m.rotulo];
       }
       linha.push(v.join('||'));
     });
@@ -3633,10 +3647,20 @@ async function estruturaDaColecao(){
   }
 }
 
-/* Os nomes dos termos de uma taxonomia, lidos da API pública, página a página.
-   null quando a leitura falha: quem chama avisa que não conferiu, em vez de tratar a
-   lista vazia como "nenhum órgão existe" e acusar tudo. */
-async function termosDaTaxonomia(id){
+/* Os caminhos dos termos de uma taxonomia ("Pai>>Filho"), lidos da API pública, página a
+   página. null quando a leitura falha: quem chama avisa que não conferiu, em vez de tratar
+   a lista vazia como "nenhum termo existe" e acusar tudo. */
+function caminhosDosTermos(termos){
+  const porId = {}; termos.forEach(t => { porId[String(t.id)] = t; });
+  return termos.map(t => {
+    const nomes = [t.name];
+    for (let x = t, n = 0; x.parent && porId[String(x.parent)] && n < 20; n++) {
+      x = porId[String(x.parent)]; nomes.unshift(x.name);
+    }
+    return nomes.join('>>');
+  });
+}
+async function caminhosDaTaxonomia(id){
   if (!id) return null;
   try {
     const nomes = [];
@@ -3651,10 +3675,10 @@ async function termosDaTaxonomia(id){
         lista = await resp.json();
       } finally { clearTimeout(t); }
       if (!Array.isArray(lista)) throw new Error('resposta inesperada');
-      lista.forEach(x => { if (x && x.name) nomes.push(x.name); });
-      if (lista.length < 100) return nomes;
+      lista.forEach(x => { if (x && x.name) nomes.push({ id: x.id, name: x.name, parent: x.parent }); });
+      if (lista.length < 100) break;
     }
-    return nomes;
+    return caminhosDosTermos(nomes);
   } catch (e) { return null; }
 }
 
@@ -3771,7 +3795,7 @@ function resumoDoQueFicouDeFora(fora){
 }
 /* O que foi ajustado ou precisa de olhar — não fica de fora, mas a equipe precisa saber.
    Listas longas vão recolhidas, para o resumo caber na tela. */
-function resumoDeSiglaEOrgao(fora){
+function resumoDeSiglaETermos(fora){
   const li = [];
   const lista = (itens, linha) => '<details><summary>ver as normas</summary><ul>' +
     itens.map(x => '<li>' + linha(x) + '</li>').join('') + '</ul></details>';
@@ -3789,13 +3813,19 @@ function resumoDeSiglaEOrgao(fora){
     'como estão na planilha; quem decide é a equipe do repositório.' +
     lista(fora.siglaDiverge, x => norma(x) + ' · ' + esc(x.orgao) + ': planilha <b>' + esc(x.planilha) +
       '</b>, tabela <b>' + esc(x.tabela) + '</b>'));
-  const fl = Object.keys(fora.orgaoForaDaLista || {}).sort();
-  if (fl.length) li.push('<b>' + fl.length + '</b> nomes de órgão que não existem na lista da coleção. ' +
-    '<b>Na importação, cada um criaria um termo novo.</b> Foram exportados como estão; a correção vai ' +
-    'para a planilha.' + lista(fl, x => esc(x) + ' <span class="cnt">(' + fora.orgaoForaDaLista[x] +
-    (fora.orgaoForaDaLista[x] === 1 ? ' norma' : ' normas') + ')</span>'));
-  if (fora.orgaoNaoConferido) li.push('Não consegui ler a lista de órgãos da coleção agora, e por isso ' +
-    '<b>o nome do órgão não foi conferido</b>. Vale exportar de novo antes de importar.');
+  Object.keys(fora.foraDaLista || {}).forEach(rotulo => {
+    const valores = fora.foraDaLista[rotulo], vl = Object.keys(valores).sort();
+    li.push('<b>' + esc(rotulo) + '</b>: ' + vl.length + (vl.length === 1 ? ' valor que não existe' :
+      ' valores que não existem') + ' entre os termos da coleção. <b>Na importação, ' +
+      (vl.length === 1 ? 'ele criaria um termo novo' : 'cada um criaria um termo novo') + '.</b> ' +
+      'Foram exportados como estão; a correção vai para a planilha.' +
+      lista(vl, x => esc(x) + ' <span class="cnt">(' + valores[x] + (valores[x] === 1 ? ' norma' : ' normas') +
+        ')</span>'));
+  });
+  const nc = fora.listaNaoConferida || [];
+  if (nc.length) li.push('Não consegui ler agora os termos da coleção para ' +
+    nc.map(x => '<b>' + esc(x) + '</b>').join(', ') + ', e por isso esses campos <b>não foram ' +
+    'conferidos</b>. Vale exportar de novo antes de importar.');
   return li;
 }
 async function comBotaoOcupado(id, fazer){
@@ -3840,11 +3870,14 @@ async function exportarCSV(){
   await comBotaoOcupado('btnExpCsv', async () => {
     const d = await dadosParaExportar();
     if (d.erro) { mostrarResultadoExport(esc(d.erro), true); return; }
-    // a lista fechada de órgãos: os termos da taxonomia que o metadado de órgão lê
-    const mdOrgao = d.estrutura.metadados.find(m => chaveRotulo(m.rotulo).indexOf('orgaoentidade') === 0);
-    const termosOrgao = await termosDaTaxonomia(mdOrgao && mdOrgao.taxonomia);
+    // as listas fechadas: os termos de cada taxonomia da coleção, menos Palavra-chave
+    const fechados = d.estrutura.metadados.filter(m => m.tipo === 'Taxonomy' &&
+      chaveRotulo(m.rotulo).indexOf('palavrachave') !== 0);
+    const caminhos = await Promise.all(fechados.map(m => caminhosDaTaxonomia(m.taxonomia)));
+    const listasFechadas = {};
+    fechados.forEach((m, i) => { listasFechadas[m.rotulo] = caminhos[i]; });
     const { matriz, fora, semFonte } = montarCsvColecao(d.estrutura.metadados, d.registros, d.idNaColecao,
-      { termosOrgao });
+      { listasFechadas });
     if (matriz.length === 1) {
       mostrarResultadoExport('Nenhuma norma dos lotes liberados tem ficha identificada no Memória SPU. ' +
         'Nada foi baixado.', true);
@@ -3853,14 +3886,14 @@ async function exportarCSV(){
     baixarTexto(csvTexto(matriz), 'memoria_spu_' + new Date().toISOString().slice(0, 10) + '.csv',
                 'text/csv;charset=utf-8');
     const li = resumoDoQueFicouDeFora(fora);
-    const so = resumoDeSiglaEOrgao(fora);
+    const so = resumoDeSiglaETermos(fora);
     mostrarResultadoExport(
       '<b class="num">Arquivo gerado.</b> ' + (matriz.length - 1) + ' normas, com os ' +
       d.estrutura.metadados.length + ' campos do Memória SPU, na ordem da coleção.' +
       (d.estrutura.aoVivo ? '' : '<br><b>Atenção:</b> não consegui consultar os campos do Memória SPU ' +
        'agora; usei a lista guardada em 20/11/2026. Vale conferir se a coleção não mudou.') +
       (li.length ? '<br><br>O que ficou de fora:<ul><li>' + li.join('</li><li>') + '</li></ul>' : '') +
-      (so.length ? '<br>Sigla e órgão:<ul><li>' + so.join('</li><li>') + '</li></ul>' : '') +
+      (so.length ? '<br>Sigla e termos da coleção:<ul><li>' + so.join('</li><li>') + '</li></ul>' : '') +
       (semFonte.length ? '<br>Coluna em branco, porque a ferramenta não guarda esse dado: ' +
         semFonte.map(esc).join(', ') + '.' : ''),
       !d.estrutura.aoVivo);
