@@ -2334,10 +2334,27 @@ async function setDuvidaNota(v){
    - regime de aquisição   -> macrofunção 03.02 "Gestão do ingresso patrimonial"
    Os valores destes dois campos vêm da Tabela Taxonômica 02/2025 (Regimes de Destinação
    Imobiliária), que ainda não foi carregada — por isso seguem como texto livre. */
+function regimesChamados(codigos){
+  const cods = (codigos || []).map(c => String(c || ''));
+  return { destinacao: cods.some(c => c.startsWith('03.04.02')),
+           aquisicao:  cods.some(c => c.startsWith('03.02')) };
+}
+/* Regime sem o assunto que o chama (26/11/2026). A tela só mostra o regime quando o assunto
+   pede; se a pessoa escolhia o regime e depois trocava o assunto de ramo, o valor ficava
+   gravado, invisível, e saía na exportação. Caso real: Portaria nº 84/2020, assunto em
+   03.04.01 e regime «Locação para terceiros». Função pura: devolve os campos sem o regime
+   órfão e quais saíram. Vale ao gravar a ficha, ao gravar o rascunho e na exportação. */
+function semRegimeOrfao(c, codigos){
+  const chama = regimesChamados(codigos), out = Object.assign({}, c || {}), retirados = [];
+  if (out.regime_destinacao && !chama.destinacao) { retirados.push('regime de destinação'); delete out.regime_destinacao; }
+  if (out.regime_aquisicao && !chama.aquisicao) { retirados.push('regime de aquisição'); delete out.regime_aquisicao; }
+  return { campos: out, retirados };
+}
+function codigosDosAssuntos(ids){ return (ids || []).map(id => (porId[id]||{}).codigo_tt || ''); }
 function campoRegime(){
-  const cods = selAssuntos.map(id => (porId[id]||{}).codigo_tt || '');
-  const temDestinacao = cods.some(c => c.startsWith('03.04.02'));
-  const temAquisicao  = cods.some(c => c.startsWith('03.02'));
+  const chama = regimesChamados(codigosDosAssuntos(selAssuntos));
+  const temDestinacao = chama.destinacao;
+  const temAquisicao  = chama.aquisicao;
   let html = '';
   if (temDestinacao) {
     const atual = campos.regime_destinacao || '';
@@ -2782,6 +2799,8 @@ async function salvarUmaVez(modo){
      nova proíbe, e o bloqueio da tela não teria alcançado — ele impede digitar, não
      impede o que já estava no estado. */
   if (ehRetificacao()) { selAssuntos = []; selPalavras = []; }
+  // regime que o assunto escolhido não chama não é gravado (ver semRegimeOrfao)
+  campos = semRegimeOrfao(campos, codigosDosAssuntos(selAssuntos)).campos;
 
   const fichaFinal = Object.assign({}, campos, {
     assuntos: selAssuntos,
@@ -2990,6 +3009,8 @@ async function salvarRascunho(){
     return;
   }
   const agora = new Date().toISOString();
+  // regime órfão também não vai para o rascunho, senão reapareceria ao reabrir
+  campos = semRegimeOrfao(campos, codigosDosAssuntos(selAssuntos)).campos;
   // A reserva é RENOVADA aqui, não presumida. Desde 27/08 o rascunho segura a reserva sem
   // prazo, então renovar é menos crítico do que era — mas continua importando, porque é
   // isto que registra QUEM está com a norma. E renovar tem de ser reivindicação, não
@@ -3361,7 +3382,7 @@ function partes(v, sep){
   return String(v == null ? '' : v).split(sep).map(x => x.trim()).filter(Boolean);
 }
 
-/* ---------- sigla e órgão (24/11/2026), a partir das perguntas do Matheus
+/* ---------- sigla e órgão (24/11/2026), a partir das perguntas do Mateus
 
    A sigla vem da planilha da equipe, onde era fórmula (PROCV na aba `Nomes_Unidades`)
    colada como valor. Com a fórmula vieram dois restos que não podem chegar ao Tainacan:
@@ -3545,7 +3566,7 @@ function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
   const fora = { semId: 0, naoCoube: {}, relSemId: 0, numeroInvalido: 0, dataInvalida: 0, naoPatrimoniais: 0,
                  // o que não fica de fora, mas o aviso precisa dizer
                  siglaMarcas: 0, siglaVazia: [], siglaDiverge: [],
-                 foraDaLista: {}, listaNaoConferida: naoConferidos };
+                 foraDaLista: {}, listaNaoConferida: naoConferidos, regimeSemAssunto: [] };
   const semFonte = estrutura.filter(m => !fonteDoMetadado(m.rotulo)).map(m => m.rotulo);
   const matriz = [['special_item_id'].concat(estrutura.map(m => m.rotulo),
                                              comControle ? [COLUNA_CONTROLE_PATRIMONIAL] : [])];
@@ -3558,7 +3579,13 @@ function montarCsvColecao(estrutura, registros, idNaColecao, opcoes){
     if (!r0.doc.item_id_colecao) { fora.semId++; if (!incluirSemId) return; }
     // a sigla é calculada uma vez por norma, e o que mudou nela vai para o aviso
     const sig = siglaParaExportar(orgaosDoRegistro(r0), siglasDaPlanilha(r0));
-    const r = Object.assign({}, r0, { siglaExport: sig });
+    // Defesa para fichas gravadas antes de 26/11/2026: regime sem o assunto que o chama não
+    // sai. `codigosAssunto` ausente = não deu para saber os códigos, e nada é retirado.
+    const reg = Array.isArray(r0.codigosAssunto) ? semRegimeOrfao(r0.campos, r0.codigosAssunto)
+                                                 : { campos: r0.campos, retirados: [] };
+    if (reg.retirados.length) fora.regimeSemAssunto.push(Object.assign(nomeDaNorma(r0),
+      { campos: reg.retirados }));
+    const r = Object.assign({}, r0, { siglaExport: sig, campos: reg.campos });
     if (temSigla) {
       const orgao = orgaosDoRegistro(r0).join(' + ');
       fora.siglaMarcas += sig.removidas;
@@ -3740,6 +3767,9 @@ async function dadosParaExportar(){
       const e = etapaDe[d.id] || null;
       return { doc: d, campos: (e && e.campos) || {}, termos: (e && e.termos) || [],
                plan: planDe[d.item_id_tainacan] || {}, revogadoPor: revogadoPor[d.id] || [],
+               // códigos do assunto, para não exportar regime que o assunto não chama; sem a
+               // árvore carregada não dá para saber, e nada é retirado
+               codigosAssunto: arvore.length ? codigosDosAssuntos(((e && e.campos) || {}).assuntos) : undefined,
                triagem: !e ? '' : e.patrimonial === false ? 'não' : e.patrimonial === true ? 'sim' : '',
                extra: {
                  lote: d.lote || '', idAntigo: d.item_id_tainacan || '',
@@ -3791,6 +3821,13 @@ function resumoDoQueFicouDeFora(fora){
     'valor em «' + esc(k) + '», e esse campo só aceita um no Memória SPU. Foi o primeiro.'));
   if (fora.numeroInvalido) li.push('<b>' + fora.numeroInvalido + '</b> número de norma que não é só dígitos.');
   if (fora.dataInvalida) li.push('<b>' + fora.dataInvalida + '</b> datas fora do formato dia/mês/ano.');
+  const rs = fora.regimeSemAssunto || [];
+  if (rs.length) li.push('<b>' + rs.length + '</b> ' + (rs.length === 1 ? 'norma tinha' : 'normas tinham') +
+    ' regime gravado sem o assunto que o pede (destinação em 03.04.02, aquisição em 03.02). O regime ' +
+    'não foi exportado. Abrir a ficha e salvar de novo resolve.' +
+    '<details><summary>ver as normas</summary><ul>' + rs.map(x => '<li>' + esc(x.titulo || '(sem título)') +
+      (x.id ? ' <span class="cnt">#' + esc(x.id) + '</span>' : '') + ' · ' + esc(x.campos.join(', ')) +
+      '</li>').join('') + '</ul></details>');
   return li;
 }
 /* O que foi ajustado ou precisa de olhar — não fica de fora, mas a equipe precisa saber.
